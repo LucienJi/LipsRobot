@@ -133,6 +133,7 @@ class LeggedRobot(BaseTask):
         self.reset_idx(env_ids) # 将需要reset的env进行重置
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
+        self.llast_actions[:] = self.last_actions[:]
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
@@ -160,10 +161,10 @@ class LeggedRobot(BaseTask):
         if len(env_ids) == 0:
             return
         # update curriculum
-        if self.cfg.terrain.curriculum:
+        if (not self.eval) and self.cfg.terrain.curriculum:
             self._update_terrain_curriculum(env_ids)
         # avoid updating command curriculum at each step since the maximum command is common to all envs
-        if self.cfg.commands.curriculum and (self.common_step_counter % self.max_episode_length==0):
+        if (not self.eval) and self.cfg.commands.curriculum and (self.common_step_counter % self.max_episode_length==0):
             self.update_command_curriculum(env_ids)
         
         # reset robot states
@@ -175,6 +176,7 @@ class LeggedRobot(BaseTask):
             self._randomize_rigid_body_props(env_ids, self.cfg)
 
         # reset buffers
+        self.llast_actions[env_ids] = 0.
         self.last_actions[env_ids] = 0.
         self.last_dof_vel[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
@@ -265,7 +267,7 @@ class LeggedRobot(BaseTask):
             # print("Check: ", self.privileged_obs_buf.shape)
         # add noise if needed
         if self.add_noise:
-            self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
+            self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec[0:48] 
 
     def create_sim(self):
         """ Creates simulation, terrain and evironments
@@ -374,7 +376,8 @@ class LeggedRobot(BaseTask):
         """
         # 
         env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
-        self._resample_commands(env_ids)
+        if not self.eval:
+            self._resample_commands(env_ids)
         if self.cfg.commands.heading_command:
             forward = quat_apply(self.base_quat, self.forward_vec)
             heading = torch.atan2(forward[:, 1], forward[:, 0])
@@ -382,10 +385,14 @@ class LeggedRobot(BaseTask):
 
         if self.cfg.terrain.measure_heights:
             self.measured_heights = self._get_heights() # 获得高程图obs
-        if self.cfg.domain_rand.push_robots and  (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
+        #! Eval 的时候不要被动 push 
+        if not self.eval  and (self.cfg.domain_rand.push_robots) and  (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
             self._push_robots()
 
     def _randomize_rigid_body_props(self, env_ids, cfg:Go1RoughCfgPriLipsNet):
+        #! eval模式下不要随机化 body propos
+        if self.eval:
+            return 
         if cfg.domain_rand.randomize_base_mass:
             min_payload, max_payload = cfg.domain_rand.added_mass_range
             # self.payloads[env_ids] = -1.0
@@ -594,6 +601,7 @@ class LeggedRobot(BaseTask):
         self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.llast_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_dof_vel = torch.zeros_like(self.dof_vel)
         self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
         self.commands = torch.zeros(self.num_envs, self.cfg.commands.num_commands, dtype=torch.float, device=self.device, requires_grad=False) # x vel, y vel, yaw vel, heading
@@ -999,3 +1007,57 @@ class LeggedRobot(BaseTask):
     def _reward_feet_contact_forces(self):
         # penalize high contact forces
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
+
+    #------------ end of reward functions----------------
+
+    # -------------- eval func --------------------
+    def set_commands(self, commands):
+        if commands is None:
+            self._resample_commands(torch.arange(self.num_envs))
+            return 
+        if not isinstance(commands, torch.Tensor): 
+            commands = torch.tensor(commands, dtype=torch.float32, device=self.device)
+        if commands.shape[0] != self.num_envs:
+            commands = commands.reshape(1,3).repeat(self.num_envs, 1)
+        self.commands[:,0:3] = commands[:,0:3].clone()
+    
+    def set_eval(self, eval:True):
+        self.eval = eval
+    
+    def set_noise_scale(self, level = 1.0 ): 
+        noise_vec = torch.zeros_like(self.obs_buf[0])
+        self.add_noise = True 
+        noise_scales = self.cfg.noise.noise_scales
+        noise_level = level
+        noise_vec[:3] = noise_scales.lin_vel * noise_level * self.obs_scales.lin_vel
+        noise_vec[3:6] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
+        noise_vec[6:9] = noise_scales.gravity * noise_level
+        noise_vec[9:12] = 0. # commands
+        noise_vec[12:24] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        noise_vec[24:36] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
+        noise_vec[36:48] = 0. # previous actions
+        self.noise_scale_vec[0:48] = noise_vec[0:48]
+
+    def push_robots(self, max_vel ):
+        if max_vel is None:
+            max_vel = self.cfg.domain_rand.max_push_vel_xy
+            self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device)
+        elif type(max_vel) == float or type(max_vel) == int:
+            self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device)
+        else:
+            assert len(max_vel) == 2
+            self.root_states[:, 7:9] = torch_rand_float(-max_vel[0], max_vel[1], (self.num_envs, 2), device=self.device)
+        self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
+        
+    
+    def get_eval_result(self,):
+        action_fluctation = torch.norm(self.actions - self.llast_actions, dim=-1,p=2).cpu().numpy() #! 其实是 fluction,因为 last action 更新了
+        result = {
+            'action_fluctation': action_fluctation,
+            'cmd_x' : self.commands[:,0].cpu().numpy(),
+            'cmd_y' : self.commands[:,1].cpu().numpy(),
+            'cmd_yaw' : self.commands[:,2].cpu().numpy(),
+            'base_lin_vel_x' : self.base_lin_vel[:,0].cpu().numpy(),
+            'base_lin_vel_y' : self.base_lin_vel[:,1].cpu().numpy(),
+            'base_lin_vel_z' : self.base_lin_vel[:,2].cpu().numpy(),
+        }

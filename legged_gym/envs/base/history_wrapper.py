@@ -49,10 +49,5 @@ class HistoryWrapper(gym.Wrapper):
                 "obs_history": self.obs_history,
                 }
 
-    def set_commands(self, commands):
-        if not isinstance(commands, torch.Tensor): 
-            commands = torch.tensor(commands, dtype=torch.float32, device=self.env.device)
-        if commands.shape[0] != self.env.num_envs:
-            commands = commands.reshape(1,3).repeat(self.env.num_envs, 1)
-        self.env.commands[:,0:3] = commands[:,0:3].clone()
+    
 

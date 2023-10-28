@@ -34,13 +34,14 @@ import os
 import isaacgym
 from legged_gym.envs import *
 from legged_gym.utils import  get_args, export_policy_as_jit, task_registry, Logger
-
+from legged_gym.envs.go1.go1_eval_config import Go1RoughCfgEval,Go1RoughCfgPPOEval
 import numpy as np
 import torch
 
 
 def play(args):
-    env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
+    # env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
+    env_cfg , train_cfg = Go1RoughCfgEval, Go1RoughCfgPPOEval
     # override some parameters for testing
     env_cfg.env.num_envs = min(env_cfg.env.num_envs, 100)
     env_cfg.terrain.num_rows = 5
