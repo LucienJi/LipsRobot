@@ -75,6 +75,8 @@ class BaseTask():
         # allocate buffers
         self.obs_buf = torch.zeros(self.num_envs, self.num_obs, device=self.device, dtype=torch.float)
         self.rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
+        self.rew_buf_pos = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
+        self.rew_buf_neg = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
         self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
@@ -135,11 +137,11 @@ class BaseTask():
                     sys.exit()
                 elif evt.action == "toggle_viewer_sync" and evt.value > 0:
                     self.enable_viewer_sync = not self.enable_viewer_sync
-
+            
             # fetch results
             if self.device != 'cpu':
                 self.gym.fetch_results(self.sim, True)
-
+            
             # step graphics
             if self.enable_viewer_sync:
                 self.gym.step_graphics(self.sim)
@@ -148,3 +150,4 @@ class BaseTask():
                     self.gym.sync_frame_time(self.sim)
             else:
                 self.gym.poll_viewer_events(self.viewer)
+            

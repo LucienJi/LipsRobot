@@ -160,8 +160,14 @@ class LeggedRobotCfg(BaseConfig):
             dof_pos = 1.0
             dof_vel = 0.05
             height_measurements = 5.0
+
         clip_observations = 100.
         clip_actions = 100.
+        friction_range =  [0, 1]
+        ground_friction_range =  [0, 1]
+        restitution_range = [0, 1.0]
+        added_mass_range = [-1., 3.]
+        com_displacement_range = [-0.1, 0.1]
 
     class noise:
         add_noise = True # 是否要在obs上添加噪音

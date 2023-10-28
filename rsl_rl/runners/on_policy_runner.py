@@ -36,8 +36,8 @@ import statistics
 from torch.utils.tensorboard import SummaryWriter
 import torch
 
-from rsl_rl.algorithms import PPO
-from rsl_rl.modules.actor_critic_lipsnet import ActorCriticLipsNet as ActorCritic
+from rsl_rl.algorithms import PPOPriLipsNet
+from rsl_rl.modules import ActorCriticPriLipsNet
 from rsl_rl.env import VecEnv
 
 
@@ -45,7 +45,7 @@ class OnPolicyRunner:
 
     def __init__(self,
                  env: VecEnv,
-                 train_cfg,
+                 train_cfg,  # train所需的所有参数都在这里
                  log_dir=None,
                  device='cpu'):
 
@@ -59,26 +59,28 @@ class OnPolicyRunner:
         else:
             num_critic_obs = self.env.num_obs
         actor_critic_class = eval(self.cfg["policy_class_name"]) # ActorCritic 网络结构
-        actor_critic: ActorCritic = actor_critic_class( self.env.num_obs,
+        actor_critic: ActorCriticPriLipsNet = actor_critic_class( self.env.num_obs,
+                                                        self.env.num_obs_history,
                                                         num_critic_obs,
                                                         self.env.num_actions,
                                                         **self.policy_cfg).to(self.device)
         alg_class = eval(self.cfg["algorithm_class_name"]) # PPO 学习算法
-        self.alg: PPO = alg_class(actor_critic, device=self.device, **self.alg_cfg)
+        self.alg: PPOPriLipsNet = alg_class(actor_critic, device=self.device,use_lips = self.policy_cfg['use_lips'], **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
-        self.stage = self.cfg["stage"]
-        # init storage and model
-        self.alg.init_storage(self.env.num_envs, self.num_steps_per_env, [self.env.num_obs], [self.env.num_privileged_obs], [self.env.num_actions])
 
+        # init storage and model
+        self.alg.init_storage(self.env.num_envs, self.num_steps_per_env, [self.env.num_obs], 
+                              [self.env.num_privileged_obs], [self.env.cfg.env.num_observation_history,self.env.num_obs], [self.env.num_actions])
+
+        
         # Log
         self.log_dir = log_dir
         self.writer = None
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
-
-        _, _ = self.env.reset()
+        self.env.reset()
     
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         # initialize writer
@@ -86,12 +88,10 @@ class OnPolicyRunner:
             self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
         if init_at_random_ep_len: #TODO:
             self.env.episode_length_buf = torch.randint_like(self.env.episode_length_buf, high=int(self.env.max_episode_length))
-        obs = self.env.get_observations()
-        privileged_obs = self.env.get_privileged_observations()
-        critic_obs = privileged_obs if privileged_obs is not None else obs
-        obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
+        obs_dict = self.env.get_observations()
+        for k,v in obs_dict.items():
+            obs_dict[k] = v.to(self.device)
         self.alg.actor_critic.train() # switch to train mode (for dropout for example)
-
         ep_infos = []
         rewbuffer = deque(maxlen=100)
         lenbuffer = deque(maxlen=100)
@@ -99,15 +99,17 @@ class OnPolicyRunner:
         cur_episode_length = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
 
         tot_iter = self.current_learning_iteration + num_learning_iterations
+
+        
         for it in range(self.current_learning_iteration, tot_iter):
             start = time.time()
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
-                    actions = self.alg.act(obs, critic_obs,stage=self.stage)
-                    obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
-                    critic_obs = privileged_obs if privileged_obs is not None else obs
-                    obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
+                    actions = self.alg.act(obs_dict['obs'], obs_dict['privileged_obs'], obs_dict['obs_history'],use_student=False,use_privileged_obs=False)
+                    obs_dict, rewards, dones, infos = self.env.step(actions)
+                    for k,v in obs_dict.items():
+                        obs_dict[k] = v.to(self.device)
                     self.alg.process_env_step(rewards, dones, infos)
                     
                     if self.log_dir is not None:
@@ -127,11 +129,12 @@ class OnPolicyRunner:
 
                 # Learning step
                 start = stop
-                self.alg.compute_returns(critic_obs)
+                self.alg.compute_returns(obs_dict['obs'], obs_dict['privileged_obs'])
             
-            mean_value_loss, mean_surrogate_loss,mean_k_sl_loss,mean_l2_loss,mean_penality,\
-            mean_max_jacob,mean_min_jacob,mean_mean_jacob = self.alg.update(self.stage)
-
+            mean_value_loss, mean_surrogate_loss, mean_student_neglogp,mean_adaptation_loss,\
+                 mean_k_out, mean_jac_norm, max_k_out, max_jac_norm, min_k_out, min_jac_norm,mean_k_l2= self.alg.update(
+                                                                                        update_teacher=True, 
+                                                                                        update_student=True)
             stop = time.time()
             learn_time = stop - start
             if self.log_dir is not None:
@@ -167,15 +170,21 @@ class OnPolicyRunner:
 
         self.writer.add_scalar('Loss/value_function', locs['mean_value_loss'], locs['it'])
         self.writer.add_scalar('Loss/surrogate', locs['mean_surrogate_loss'], locs['it'])
-        self.writer.add_scalar('Loss/learning_rate', self.alg.learning_rate, locs['it'])
-
-        self.writer.add_scalar('Loss/K_SL_Loss', locs['mean_k_sl_loss'], locs['it'])
-        self.writer.add_scalar('Loss/L2_Loss', locs['mean_l2_loss'], locs['it'])
-        self.writer.add_scalar('Loss/Penality', locs['mean_penality'], locs['it'])
-        self.writer.add_scalar('Loss/Max Jacob', locs['mean_max_jacob'], locs['it'])
-        self.writer.add_scalar('Loss/Min Jacob', locs['mean_min_jacob'], locs['it'])
-        self.writer.add_scalar('Loss/Mean Jacob', locs['mean_mean_jacob'], locs['it'])
-
+        self.writer.add_scalar('Loss/mean_student_neglogp', locs['mean_student_neglogp'], locs['it'])
+        self.writer.add_scalar('Loss/Adaptation_module', locs['mean_adaptation_loss'], locs['it'])
+        self.writer.add_scalar('Loss/mean_k_l2', locs['mean_k_l2'], locs['it'])
+        self.writer.add_scalar('Loss/mean_k_out', locs['mean_k_out'], locs['it'])
+        self.writer.add_scalar('Loss/max_k_out', locs['max_k_out'], locs['it'])
+        self.writer.add_scalar('Loss/min_k_out', locs['min_k_out'], locs['it'])
+        self.writer.add_scalar('Loss/mean_jac_norm', locs['mean_jac_norm'], locs['it'])
+        self.writer.add_scalar('Loss/max_jac_norm', locs['max_jac_norm'], locs['it'])
+        self.writer.add_scalar('Loss/min_jac_norm', locs['min_jac_norm'], locs['it'])
+        
+        # self.writer.add_scalar('Loss/learning_rate', self.alg.learning_rate, locs['it'])
+        # self.writer.add_scalar('Loss/learning_rate_actor_f', self.alg.learning_rate_actor_f, locs['it'])
+        # self.writer.add_scalar('Loss/learning_rate_actor_k', self.alg.learning_rate_actor_k, locs['it'])
+        # self.writer.add_scalar('Loss/learning_rate_critic', self.alg.learning_rate_critic, locs['it'])
+        
         self.writer.add_scalar('Policy/mean_noise_std', mean_std.item(), locs['it'])
         self.writer.add_scalar('Perf/total_fps', fps, locs['it'])
         self.writer.add_scalar('Perf/collection time', locs['collection_time'], locs['it'])
@@ -195,12 +204,15 @@ class OnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                           f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                           f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
-                          f"""{'K_SL_Loss:':>{pad}} {locs['mean_k_sl_loss']:.4f}\n"""
-                          f"""{'L2_Loss:':>{pad}} {locs['mean_l2_loss']:.4f}\n"""
-                          f"""{'Penality:':>{pad}} {locs['mean_penality']:.4f}\n"""
-                          f"""{'Max Jacob:':>{pad}} {locs['mean_max_jacob']:.4f}\n"""
-                          f"""{'Min Jacob:':>{pad}} {locs['mean_min_jacob']:.4f}\n"""
-                          f"""{'Mean Jacob:':>{pad}} {locs['mean_mean_jacob']:.4f}\n"""
+                          f"""{'Adaptation loss:':>{pad}} {locs['mean_adaptation_loss']:.4f}\n"""
+                          f"""{'BC loss:':>{pad}} {locs['mean_student_neglogp']:.4f}\n"""
+                          f"""{'mean_k_l2:':>{pad}} {locs['mean_k_l2']:.4f}\n"""
+                          f"""{'mean_k_out:':>{pad}} {locs['mean_k_out']:.4f}\n"""
+                          f"""{'max_k_out:':>{pad}} {locs['max_k_out']:.4f}\n"""
+                          f"""{'min_k_outs:':>{pad}} {locs['min_k_out']:.4f}\n"""
+                          f"""{'mean_jac_norm:':>{pad}} {locs['mean_jac_norm']:.4f}\n"""
+                          f"""{'min_jac_norm:':>{pad}} {locs['min_jac_norm']:.4f}\n"""
+                          f"""{'max_jac_norm:':>{pad}} {locs['max_jac_norm']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
                           f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
                           f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n""")
@@ -213,12 +225,15 @@ class OnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                           f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                           f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
-                          f"""{'K_SL_Loss:':>{pad}} {locs['mean_k_sl_loss']:.4f}\n"""
-                          f"""{'L2_Loss:':>{pad}} {locs['mean_l2_loss']:.4f}\n"""
-                          f"""{'Penality:':>{pad}} {locs['mean_penality']:.4f}\n"""
-                          f"""{'Max Jacob:':>{pad}} {locs['mean_max_jacob']:.4f}\n"""
-                          f"""{'Min Jacob:':>{pad}} {locs['mean_min_jacob']:.4f}\n"""
-                          f"""{'Mean Jacob:':>{pad}} {locs['mean_mean_jacob']:.4f}\n"""
+                          f"""{'Adaptation loss:':>{pad}} {locs['mean_adaptation_loss']:.4f}\n"""
+                          f"""{'BC loss:':>{pad}} {locs['mean_student_neglogp']:.4f}\n"""
+                          f"""{'mean_k_l2:':>{pad}} {locs['mean_k_l2']:.4f}\n"""
+                          f"""{'mean_k_out:':>{pad}} {locs['mean_k_out']:.4f}\n"""
+                          f"""{'max_k_out:':>{pad}} {locs['max_k_out']:.4f}\n"""
+                          f"""{'min_k_outs:':>{pad}} {locs['min_k_out']:.4f}\n"""
+                          f"""{'mean_jac_norm:':>{pad}} {locs['mean_jac_norm']:.4f}\n"""
+                          f"""{'min_jac_norm:':>{pad}} {locs['min_jac_norm']:.4f}\n"""
+                          f"""{'max_jac_norm:':>{pad}} {locs['max_jac_norm']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
                         #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
                         #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
@@ -235,8 +250,8 @@ class OnPolicyRunner:
     def save(self, path, infos=None):
         torch.save({
             'model_state_dict': self.alg.actor_critic.state_dict(),
-            'rl_optimizer_state_dict': self.alg.rl_optimizer.state_dict(),
-            'k_optimizer_state_dict': self.alg.k_optimizer.state_dict(),
+            'teacher_optimizer_state_dict': self.alg.teacher_optimizer.state_dict(),
+            'student_optimizer_state_dict': self.alg.student_optimizer.state_dict(),
             'iter': self.current_learning_iteration,
             'infos': infos,
             }, path)
@@ -245,17 +260,22 @@ class OnPolicyRunner:
         loaded_dict = torch.load(path)
         self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
         if load_optimizer:
-            self.alg.rl_optimizer.load_state_dict(loaded_dict['rl_optimizer_state_dict'])
-            self.alg.k_optimizer.load_state_dict(loaded_dict['k_optimizer_state_dict'])
+            self.alg.teacher_optimizer.load_state_dict(loaded_dict['teacher_optimizer_state_dict'])
+            self.alg.student_optimizer.load_state_dict(loaded_dict['student_optimizer_state_dict'])
         self.current_learning_iteration = loaded_dict['iter']
         return loaded_dict['infos']
+
+    def load_expert(self,path):
+        loaded_dict = torch.load(path)
+        self.alg.actor_critic.teacher_adaptation_module.load_state_dict(loaded_dict['model_state_dict'],strict=False)
+        self.alg.actor_critic.actor_teacher.load_state_dict(loaded_dict['model_state_dict'],strict=False)
+        print("###### Teacher loaded ######")
+        return loaded_dict['infos']
+    
+    
 
     def get_inference_policy(self, device=None):
         self.alg.actor_critic.eval() # switch to evaluation mode (dropout for example)
         if device is not None:
             self.alg.actor_critic.to(device)
-        def act_inference(obs):
-            return self.alg.actor_critic.act_inference(obs, stage=self.stage)
-        # return self.alg.actor_critic.act_inference()
-        return act_inference 
-
+        return self.alg.actor_critic.act_inference

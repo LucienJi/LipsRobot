@@ -4,12 +4,12 @@ import torch.nn.functional as F
 from functorch import jacrev, vmap
 
 
-def mlp(sizes, hid_nonliear, out_nonliear):
+def mlp(sizes, hid_nonlinear, out_nonlinear):
     # declare layers
     layers = []
     for j in range(len(sizes) - 1):
-        nonliear = hid_nonliear if j < len(sizes) - 2 else out_nonliear
-        layers += [nn.Linear(sizes[j], sizes[j + 1]), nonliear]
+        nonlinear = hid_nonlinear if j < len(sizes) - 2 else out_nonlinear
+        layers += [nn.Linear(sizes[j], sizes[j + 1]), nonlinear] # 这里nonlinear就是激活函数的实例化
     # init weight
     for i in range(len(layers) - 1):
         if isinstance(layers[i], nn.Linear):
@@ -23,7 +23,7 @@ def mlp(sizes, hid_nonliear, out_nonliear):
 
 
 class K_net(nn.Module):
-    def __init__(self, global_lips, k_init, sizes, hid_nonliear, out_nonliear) -> None:
+    def __init__(self, global_lips, k_init, sizes, hid_nonlinear, out_nonlinear) -> None:
         super().__init__()
         self.global_lips = global_lips
         if global_lips:
@@ -31,7 +31,7 @@ class K_net(nn.Module):
             self.k = torch.nn.Parameter(torch.tensor(k_init, dtype=torch.float), requires_grad=True)
         else:
             # declare network
-            self.k = mlp(sizes, hid_nonliear, out_nonliear)
+            self.k = mlp(sizes, hid_nonlinear, out_nonlinear)
             # set K_init
             self.k[-2].bias.data += torch.tensor(k_init, dtype=torch.float).data
 
@@ -43,30 +43,36 @@ class K_net(nn.Module):
         
 
 class LipsNet(nn.Module):
-    def __init__(self, f_sizes,k_sizes, global_lips=True, k_init=1,
-                 f_hid_nonliear=nn.ReLU, f_out_nonliear=nn.Identity,
-                k_hid_act=nn.Tanh, k_out_act=nn.Identity,k_type = 1,
-                 loss_lambda=0.1, eps=1e-4, squash_action=False) -> None:
+    def __init__(self, 
+                 f_sizes, 
+                 f_hid_nonlinear=nn.ReLU, 
+                 f_out_nonlinear=nn.Identity,
+                 global_lips=True, 
+                 k_init=100, 
+                 k_sizes=None, 
+                 k_hid_nonlinear=nn.Tanh,
+                 k_out_nonlinear=nn.Identity,
+                 loss_lambda=0.1,
+                 eps=1e-4,
+                 squash_action=True) -> None:
         super().__init__()
-        print("################### LipsNet Test ###################")
         # declare network
-        self.k_type = k_type 
-        self.f_net = mlp(f_sizes, f_hid_nonliear, f_out_nonliear)
-        self.k_net = K_net(global_lips, k_init, k_sizes, k_hid_act, k_out_act)
+        self.f_net = mlp(f_sizes, f_hid_nonlinear, f_out_nonlinear)
+        self.k_net = K_net(global_lips, k_init, k_sizes, k_hid_nonlinear, k_out_nonlinear)
         # declare hyperparameters
-        self.loss_lambda = loss_lambda
+        # self.loss_lambda = loss_lambda # 不在正向传播时进行计算 K regularizer
         self.eps = eps
         self.squash_action = squash_action
         # initialize as eval mode
         self.eval()
 
-    def forward(self, x):
+    def forward(self, x, get_info=False):
         # K(x) forward
         k_out = self.k_net(x)
-        # L2 regularization backward
-        if self.training and k_out.requires_grad:
-            lips_loss = self.loss_lambda * (k_out ** 2).mean()
-            lips_loss.backward(retain_graph=True)
+        # # L2 regularization backward
+        # if self.training and k_out.requires_grad:
+        #     lips_loss = self.loss_lambda * (k_out ** 2).mean()
+        #     lips_loss.backward(retain_graph=True)
         # f(x) forward
         f_out = self.f_net(x)
         # calcute jac matrix
@@ -79,126 +85,51 @@ class LipsNet(nn.Module):
         #             (batch     , f output dim  , x feature dim)
         # calcute jac norm
         jac_norm = torch.norm(jacobi, 2, dim=(1,2)).unsqueeze(1)
-        
         # multi-dimensional gradient normalization (MGN)
-        if self.k_type == 0:
-            action = f_out / (jac_norm + self.eps)
-        else:
-            action = k_out * f_out / (jac_norm + self.eps)
+        action = k_out * f_out / (jac_norm + self.eps)
         # squash action
         if self.squash_action:
             action = torch.tanh(action)
-        return action
-    
-
-
-
-
-
-class ExpLipsNet(nn.Module):
-    def __init__(self, f_sizes,k_sizes, global_lips, k_init,k_max,
-                 f_hid_nonliear, f_out_nonliear,
-                k_hid_act, k_out_act,k_type = 1,jacob_type = 1,
-                 loss_lambda=0.1, eps=1e-4, squash_action=False) -> None:
-        super().__init__()
-        print("################### LipsNet Test ###################")
-        # declare network
-        self.k_type = k_type 
-        self.jacob_type = jacob_type 
-        self.f_net = mlp(f_sizes, f_hid_nonliear, f_out_nonliear)
-        self.k_net = K_net(global_lips, k_init, k_sizes, k_hid_act, k_out_act)
-        # declare hyperparameters
-        self.loss_lambda = loss_lambda
-        self.eps = eps
-        self.k_max = k_max 
-        self.squash_action = squash_action
-        # initialize as eval mode
-        self.eval()
-    
-    def check_jacob(self,x):
-        with torch.no_grad():
-            jacobi = vmap(jacrev(self.f_net))(x)
-        jac_norm = torch.norm(jacobi, 2, dim=(1,2)).unsqueeze(1)
-        return jac_norm
-
-    def lips_forward(self, x):
-        # K(x) forward
-        k_out = self.k_net(x)
-        
-        # f(x) forward
-        f_out = self.f_net(x)
-        # calcute jac matrix
-        if k_out.requires_grad:
-            jacobi = vmap(jacrev(self.f_net))(x)
+        # 在需要训练时传出k_out用于训练
+        # print("action=", action)
+        # print("f_out=", f_out)
+        # print("k_out=", k_out)
+        # print("jac_norm=", jac_norm)
+        if get_info:
+            return action, k_out, jac_norm
         else:
-            with torch.no_grad():
-                jacobi = vmap(jacrev(self.f_net))(x)
-        # jacobi.dim: (x.shape[0], f_out.shape[1], x.shape[1])
-        #             (batch     , f output dim  , x feature dim)
-        # calcute jac norm
-        if self.jacob_type == 1:
-            jac_norm = torch.norm(jacobi, 2, dim=(1,2)).unsqueeze(1)
-        else:
-            jac_norm = torch.norm(jacobi, 2, dim=-1)
-        # multi-dimensional gradient normalization (MGN)
-
-        if self.k_type == 0:
-            action = f_out / (jac_norm + self.eps)
-        else:
-            action = k_out * f_out / (jac_norm + self.eps)
-
-        # squash action
-        if self.squash_action:
-            action = torch.tanh(action)
-        return action
+            return action
     
-    def raw_forward(self, x):
-        action = self.f_net(x)
-        if self.squash_action:
-            action = torch.tanh(action)
-        return action
+
+if __name__ == "__main__":
+    intput_dim = 4
+    output_dim = 2
+    net = LipsNet(f_sizes=[intput_dim,64,64,output_dim], 
+                  f_hid_nonlinear=nn.ReLU, 
+                  f_out_nonlinear=nn.Identity,
+                  global_lips=False,
+                  k_init=1, 
+                  k_sizes=[intput_dim,32,1], 
+                  k_hid_nonlinear=nn.Tanh, 
+                  k_out_nonlinear=nn.Softplus,
+                  loss_lambda=0.1, 
+                  eps=1e-4, 
+                  squash_action=False)
+    optimizer = torch.optim.Adam([
+                {'params':net.f_net.parameters(), 'lr':3e-5},
+                {'params':net.k_net.parameters(), 'lr':1e-5}])
+    input = torch.rand(128, intput_dim)
+
+    # training
+    net.train()
+    out = net(input)
+    loss = (out ** 2).mean()
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+    net.eval()
     
-    def raw_jacob_check(self,x,ord = 2):
-        with torch.no_grad():
-            jacobi = vmap(jacrev(self.f_net))(x)
-        jac_norm = torch.norm(jacobi, ord, dim=(1,2))
-        info = {
-            'max_jacob':jac_norm.max().item(),
-            'min_jacob':jac_norm.min().item(),
-            'mean_jacob':jac_norm.mean().item(),
-        }
-        return info
-
-    def sl_k_loss(self,x):
-        k_out = self.k_net(x)
-        jacob = self.check_jacob(x)
-        sl_loss = (k_out - jacob)**2 
-        penality = torch.clip( k_out - self.k_max, min = 0.0)
-        lips_loss = sl_loss + penality
-        lips_loss = lips_loss.mean()
-        loss = {
-            'sl_loss':sl_loss.mean().item(),
-            'penality':penality.mean().item(),
-            'loss': lips_loss,
-            'max_jacob':jacob.max().item(),
-            'min_jacob':jacob.min().item(),
-            'mean_jacob':jacob.mean().item(),
-        }
-        return loss 
-
-    def l2_regularization(self,x):
-        # L2 regularization backward
-        k_out = self.k_net(x)   
-        jacob = self.check_jacob(x)
-        if self.training and k_out.requires_grad:
-            l2_loss = (k_out ** 2).mean()
-            penality = torch.clip( k_out - self.k_max, min = 0.0).mean()
-        loss = {
-            'l2_loss':l2_loss.item(),
-            'penality':penality.item(),
-            'loss': l2_loss * self.loss_lambda + penality,
-            'max_jacob':jacob.max().item(),
-            'min_jacob':jacob.min().item(),
-            'mean_jacob':jacob.mean().item(),
-        }
-        return loss
+    # eval
+    net.eval()
+    input = torch.rand(128, intput_dim)
+    out = net(input)

@@ -32,11 +32,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from rsl_rl.modules import ActorCritic
+from rsl_rl.modules import ActorCritic, ActorCriticLipsNet
 from rsl_rl.storage import RolloutStorage
 
-class PPO:
-    actor_critic: ActorCritic
+class PPOLipsNet:
+    actor_critic: ActorCriticLipsNet
     def __init__(self,
                  actor_critic,
                  num_learning_epochs=1,
@@ -52,6 +52,11 @@ class PPO:
                  schedule="fixed",
                  desired_kl=0.01,
                  device='cpu',
+                 # lipsnet 的相关参数
+                 lips_loss_coef = 0.001, # 重要参数, 控制 k_out norm loss的weight
+                 learning_rate_actor_f = 1.e-3,
+                 learning_rate_actor_k = 1.e-5,
+                 learning_rate_critic = 1.e-3
                  ):
 
         self.device = device
@@ -64,7 +69,26 @@ class PPO:
         self.actor_critic = actor_critic
         self.actor_critic.to(self.device)
         self.storage = None # initialized later
-        self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=learning_rate)
+        # self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=learning_rate)
+        # 设置特殊的optimizer
+        self.learning_rate_actor_f = learning_rate_actor_f
+        self.learning_rate_actor_k = learning_rate_actor_k
+        # 保持f和k的学习率比例不变
+        self.lr_ratio_k_f = self.learning_rate_actor_k / self.learning_rate_actor_f
+        self.learning_rate_critic  = learning_rate_critic 
+        self.optimizer = torch.optim.Adam([
+                {'params':self.actor_critic.actor.f_net.parameters(), 'lr':'inf', 'lr_name':'learning_rate_actor_f',},
+                # TODO: 这里 actor_critic.std 使用跟actor_f相同的学习率
+                {'params':self.actor_critic.std, 'lr':'inf', 'lr_name':"learning_rate_actor_f",  },
+                {'params':self.actor_critic.actor.k_net.parameters(), 'lr':'inf', 'lr_name':"learning_rate_actor_k",},
+                {'params':self.actor_critic.critic.parameters(), 'lr':'inf', 'lr_name':"learning_rate_critic",},
+                ])
+        for param_group in self.optimizer.param_groups:
+            print(param_group['lr_name'], param_group['lr'])
+        print()
+        self.update_learning_rate()
+        for param_group in self.optimizer.param_groups:
+            print(param_group['lr_name'], param_group['lr'])
         self.transition = RolloutStorage.Transition()
 
         # PPO parameters
@@ -77,7 +101,10 @@ class PPO:
         self.lam = lam
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
-
+        # 设置lipsnet的loss
+        self.lips_loss_coef = lips_loss_coef
+        
+        
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
         self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, self.device)
 
@@ -117,6 +144,10 @@ class PPO:
         last_values= self.actor_critic.evaluate(last_critic_obs).detach()
         self.storage.compute_returns(last_values, self.gamma, self.lam)
 
+    def update_learning_rate(self):
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = getattr(self, param_group['lr_name'])
+    
     def update(self):
         mean_value_loss = 0
         mean_surrogate_loss = 0
@@ -128,7 +159,7 @@ class PPO:
             old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch in generator:
 
 
-                self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0])
+                _actions, k_out, jac_norm = self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0], get_info=True)  # 这里要获得 k_out, 用于优化K的norm
                 actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
                 value_batch = self.actor_critic.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
                 mu_batch = self.actor_critic.action_mean
@@ -143,12 +174,18 @@ class PPO:
                         kl_mean = torch.mean(kl)
 
                         if kl_mean > self.desired_kl * 2.0:
-                            self.learning_rate = max(1e-5, self.learning_rate / 1.5)
+                            # self.learning_rate = max(1e-5, self.learning_rate / 1.5)
+                            self.learning_rate_actor_f = max(1e-5, self.learning_rate_actor_f / 1.5)
+                            self.learning_rate_critic = max(1e-5, self.learning_rate_critic / 1.5)
                         elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
-                            self.learning_rate = min(1e-2, self.learning_rate * 1.5)
+                            # self.learning_rate = min(1e-2, self.learning_rate * 1.5)
+                            self.learning_rate_actor_f = min(1e-2, self.learning_rate_actor_f * 1.5)
+                            self.learning_rate_critic = min(1e-2, self.learning_rate_critic * 1.5)
+                        self.learning_rate_actor_k = self.learning_rate_actor_f * self.lr_ratio_k_f # 保持比例不变
+                        self.update_learning_rate()
+                        # for param_group in self.optimizer.param_groups:
+                        #     param_group['lr'] = self.learning_rate
                         
-                        for param_group in self.optimizer.param_groups:
-                            param_group['lr'] = self.learning_rate
 
 
                 # Surrogate loss
@@ -168,7 +205,11 @@ class PPO:
                 else:
                     value_loss = (returns_batch - value_batch).pow(2).mean()
 
-                loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
+                # k_out norm loss
+                lips_loss = (k_out ** 2).mean()
+                
+                loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean() \
+                    + self.lips_loss_coef * lips_loss
 
                 # Gradient step
                 self.optimizer.zero_grad()
@@ -184,4 +225,4 @@ class PPO:
         mean_surrogate_loss /= num_updates
         self.storage.clear()
 
-        return mean_value_loss, mean_surrogate_loss
+        return mean_value_loss, mean_surrogate_loss, k_out.mean().item(), jac_norm.mean().item()

@@ -44,12 +44,13 @@ from typing import Tuple, Dict
 from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.envs.base.base_task import BaseTask
 from legged_gym.utils.terrain import Terrain
-from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi, torch_rand_sqrt_float
+from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi, torch_rand_sqrt_float,get_scale_shift
 from legged_gym.utils.helpers import class_to_dict
 from .legged_robot_config import LeggedRobotCfg
+from legged_gym.envs.go1.go1_config_prilipsnet import Go1RoughCfgPriLipsNet
 
 class LeggedRobot(BaseTask):
-    def __init__(self, cfg: LeggedRobotCfg, sim_params, physics_engine, sim_device, headless):
+    def __init__(self, cfg: Go1RoughCfgPriLipsNet, sim_params, physics_engine, sim_device, headless):
         """ Parses the provided config file,
             calls create_sim() (which creates, simulation, terrain and environments),
             initilizes pytorch buffers used during training
@@ -75,6 +76,7 @@ class LeggedRobot(BaseTask):
         self._init_buffers()    
         self._prepare_reward_function()  # 获取配置文件中要求用的reward函数，以及各reward func的权重
         self.init_done = True
+        self.eval = False
 
     def step(self, actions):
         """ Apply actions, simulate, call self.post_physics_step()
@@ -86,6 +88,7 @@ class LeggedRobot(BaseTask):
         self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
         # step physics and render each frame
         self.render()
+        
         for _ in range(self.cfg.control.decimation):
             self.torques = self._compute_torques(self.actions).view(self.torques.shape)
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques))
@@ -93,6 +96,8 @@ class LeggedRobot(BaseTask):
             if self.device == 'cpu':
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
+        
+        
         self.post_physics_step()
 
         # return clipped obs, clipped states (None), rewards, dones and infos
@@ -165,7 +170,9 @@ class LeggedRobot(BaseTask):
         self._reset_dofs(env_ids)
         self._reset_root_states(env_ids)
 
-        self._resample_commands(env_ids)
+        if not self.eval:
+            self._resample_commands(env_ids)
+            self._randomize_rigid_body_props(env_ids, self.cfg)
 
         # reset buffers
         self.last_actions[env_ids] = 0.
@@ -178,6 +185,7 @@ class LeggedRobot(BaseTask):
         for key in self.episode_sums.keys():
             self.extras["episode"]['rew_' + key] = torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
             self.episode_sums[key][env_ids] = 0.
+
         # log additional curriculum info
         if self.cfg.terrain.curriculum:
             self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
@@ -186,20 +194,28 @@ class LeggedRobot(BaseTask):
         # send timeout info to the algorithm
         if self.cfg.env.send_timeouts:
             self.extras["time_outs"] = self.time_out_buf
-    
     def compute_reward(self):
         """ Compute rewards
             Calls each reward function which had a non-zero scale (processed in self._prepare_reward_function())
             adds each terms to the episode sums and to the total reward
         """
         self.rew_buf[:] = 0.
+        self.rew_buf_pos[:] = 0.
+        self.rew_buf_neg[:] = 0.
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
             rew = self.reward_functions[i]() * self.reward_scales[name]
-            self.rew_buf += rew
+            if torch.sum(rew) >= 0:
+                self.rew_buf_pos += rew
+            elif torch.sum(rew) <= 0:
+                self.rew_buf_neg += rew
             self.episode_sums[name] += rew
+
         if self.cfg.rewards.only_positive_rewards:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
+        elif self.cfg.rewards.only_positive_rewards_ji22_style: #TODO: update
+            self.rew_buf[:] = self.rew_buf_pos[:] * torch.exp(self.rew_buf_neg[:] / self.cfg.rewards.sigma_rew_neg)
+        self.episode_sums["total"] += self.rew_buf
         # add termination reward after clipping
         if "termination" in self.reward_scales:
             rew = self._reward_termination() * self.reward_scales["termination"]
@@ -218,10 +234,35 @@ class LeggedRobot(BaseTask):
                                     self.actions
                                     ),dim=-1)
         # add perceptive inputs if not blind
+        
         if self.cfg.terrain.measure_heights:
             heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.obs_scales.height_measurements
-            # print(self.root_states[:, 2].unsqueeze(1))
-            self.obs_buf = torch.cat((self.obs_buf, heights), dim=-1)
+            self.privileged_obs_buf = heights
+            if self.cfg.env.priv_observe_friction:
+                friction_coeffs_scale, friction_coeffs_shift = get_scale_shift(self.cfg.normalization.friction_range)
+                self.privileged_obs_buf = torch.cat((self.privileged_obs_buf,
+                                                    (self.friction_coeffs[:, 0].unsqueeze(
+                                                        1) - friction_coeffs_shift) * friction_coeffs_scale),
+                                                    dim=1)
+            if self.cfg.env.priv_observe_restitution:
+                restitutions_scale, restitutions_shift = get_scale_shift(self.cfg.normalization.restitution_range)
+                self.privileged_obs_buf = torch.cat((self.privileged_obs_buf,
+                                                    (self.restitutions[:, 0].unsqueeze(
+                                                        1) - restitutions_shift) * restitutions_scale),
+                                                    dim=1)
+            if self.cfg.env.priv_observe_base_mass:
+                payloads_scale, payloads_shift = get_scale_shift(self.cfg.normalization.added_mass_range)
+                self.privileged_obs_buf = torch.cat((self.privileged_obs_buf,
+                                                    (self.payloads.unsqueeze(1) - payloads_shift) * payloads_scale),
+                                                    dim=1)
+            if self.cfg.env.priv_observe_com_displacement:
+                com_displacements_scale, com_displacements_shift = get_scale_shift(
+                    self.cfg.normalization.com_displacement_range)
+                self.privileged_obs_buf = torch.cat((self.privileged_obs_buf,
+                                                    (
+                                                            self.com_displacements - com_displacements_shift) * com_displacements_scale),
+                                                    dim=1)
+            # print("Check: ", self.privileged_obs_buf.shape)
         # add noise if needed
         if self.add_noise:
             self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
@@ -234,6 +275,7 @@ class LeggedRobot(BaseTask):
         mesh_type = self.cfg.terrain.mesh_type
         if mesh_type in ['heightfield', 'trimesh']:
             self.terrain = Terrain(self.cfg.terrain, self.num_envs)
+
         if mesh_type=='plane':
             self._create_ground_plane()
         elif mesh_type=='heightfield':
@@ -264,17 +306,20 @@ class LeggedRobot(BaseTask):
         Returns:
             [List[gymapi.RigidShapeProperties]]: Modified rigid shape properties
         """
-        if self.cfg.domain_rand.randomize_friction:
-            if env_id==0:
-                # prepare friction randomization
-                friction_range = self.cfg.domain_rand.friction_range
-                num_buckets = 64
-                bucket_ids = torch.randint(0, num_buckets, (self.num_envs, 1))
-                friction_buckets = torch_rand_float(friction_range[0], friction_range[1], (num_buckets,1), device='cpu')
-                self.friction_coeffs = friction_buckets[bucket_ids]
+        # if self.cfg.domain_rand.randomize_friction:
+        #     if env_id==0:
+        #         # prepare friction randomization
+        #         friction_range = self.cfg.domain_rand.friction_range
+        #         num_buckets = 64
+        #         bucket_ids = torch.randint(0, num_buckets, (self.num_envs, 1))
+        #         friction_buckets = torch_rand_float(friction_range[0], friction_range[1], (num_buckets,1), device='cpu')
+        #         self.friction_coeffs = friction_buckets[bucket_ids]
 
-            for s in range(len(props)):
-                props[s].friction = self.friction_coeffs[env_id]
+        #     for s in range(len(props)):
+        #         props[s].friction = self.friction_coeffs[env_id]
+        for s in range(len(props)):
+            props[s].friction = self.friction_coeffs[env_id, 0]
+            props[s].restitution = self.restitutions[env_id, 0]
         return props
 
     def _process_dof_props(self, props, env_id):
@@ -313,9 +358,14 @@ class LeggedRobot(BaseTask):
         #         print(f"Mass of body {i}: {p.mass} (before randomization)")
         #     print(f"Total mass {sum} (before randomization)")
         # randomize base mass
-        if self.cfg.domain_rand.randomize_base_mass:
-            rng = self.cfg.domain_rand.added_mass_range
-            props[0].mass += np.random.uniform(rng[0], rng[1])
+        # if self.cfg.domain_rand.randomize_base_mass:
+        #     rng = self.cfg.domain_rand.added_mass_range
+        #     props[0].mass += np.random.uniform(rng[0], rng[1])
+        self.default_body_mass = props[0].mass
+
+        props[0].mass = self.default_body_mass + self.payloads[env_id]
+        props[0].com = gymapi.Vec3(self.com_displacements[env_id, 0], self.com_displacements[env_id, 1],
+                                   self.com_displacements[env_id, 2])
         return props
     
     def _post_physics_step_callback(self):
@@ -334,6 +384,30 @@ class LeggedRobot(BaseTask):
             self.measured_heights = self._get_heights() # 获得高程图obs
         if self.cfg.domain_rand.push_robots and  (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
             self._push_robots()
+
+    def _randomize_rigid_body_props(self, env_ids, cfg:Go1RoughCfgPriLipsNet):
+        if cfg.domain_rand.randomize_base_mass:
+            min_payload, max_payload = cfg.domain_rand.added_mass_range
+            # self.payloads[env_ids] = -1.0
+            self.payloads[env_ids] = torch.rand(len(env_ids), dtype=torch.float, device=self.device,
+                                                requires_grad=False) * (max_payload - min_payload) + min_payload
+        if cfg.domain_rand.randomize_com_displacement:
+            min_com_displacement, max_com_displacement = cfg.domain_rand.com_displacement_range
+            self.com_displacements[env_ids, :] = torch.rand(len(env_ids), 3, dtype=torch.float, device=self.device,
+                                                            requires_grad=False) * (
+                                                         max_com_displacement - min_com_displacement) + min_com_displacement
+
+        if cfg.domain_rand.randomize_friction:
+            min_friction, max_friction = cfg.domain_rand.friction_range
+            self.friction_coeffs[env_ids, :] = torch.rand(len(env_ids), 1, dtype=torch.float, device=self.device,
+                                                          requires_grad=False) * (
+                                                       max_friction - min_friction) + min_friction
+
+        if cfg.domain_rand.randomize_restitution:
+            min_restitution, max_restitution = cfg.domain_rand.restitution_range
+            self.restitutions[env_ids] = torch.rand(len(env_ids), 1, dtype=torch.float, device=self.device,
+                                                    requires_grad=False) * (
+                                                 max_restitution - min_restitution) + min_restitution
 
     def _resample_commands(self, env_ids):
         """ Randommly select commands of some environments
@@ -411,7 +485,6 @@ class LeggedRobot(BaseTask):
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_states),
                                                      gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-
     def _push_robots(self):
         """ Random pushes the robots. Emulates an impulse by setting a randomized base velocity. 
         """
@@ -440,7 +513,7 @@ class LeggedRobot(BaseTask):
                                                    torch.randint_like(self.terrain_levels[env_ids], self.max_terrain_level),
                                                    torch.clip(self.terrain_levels[env_ids], 0)) # (the minumum level is zero)
         self.env_origins[env_ids] = self.terrain_origins[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
-    
+
     def update_command_curriculum(self, env_ids):
         """ Implements a curriculum of increasing commands
 
@@ -479,6 +552,17 @@ class LeggedRobot(BaseTask):
         return noise_vec
 
     #----------------------------------------
+    def _init_custom_buffers__(self):
+        #! custom buffer: 
+        self.friction_coeffs = self.default_friction * torch.ones(self.num_envs, 4, dtype=torch.float, device=self.device,
+                                                                  requires_grad=False)
+        self.restitutions = self.default_restitution * torch.ones(self.num_envs, 4, dtype=torch.float, device=self.device,
+                                                                  requires_grad=False)
+        self.payloads = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+
+        self.com_displacements = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device,
+                                             requires_grad=False)
+
     def _init_buffers(self):
         """ Initialize torch tensors which will contain simulation states and processed quantities
         """
@@ -542,6 +626,7 @@ class LeggedRobot(BaseTask):
                     print(f"PD gain of joint {name} were not defined, setting them to zero")
         self.default_dof_pos = self.default_dof_pos.unsqueeze(0)
 
+        
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.
             Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
@@ -568,6 +653,8 @@ class LeggedRobot(BaseTask):
         # reward episode sums
         self.episode_sums = {name: torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
                              for name in self.reward_scales.keys()}
+        self.episode_sums["total"] = torch.zeros(self.num_envs, dtype=torch.float, device=self.device,
+                                                 requires_grad=False)
 
     def _create_ground_plane(self):
         """ Adds a ground plane to the simulation, sets friction and restitution based on the cfg.
@@ -671,6 +758,11 @@ class LeggedRobot(BaseTask):
         env_upper = gymapi.Vec3(0., 0., 0.)
         self.actor_handles = []
         self.envs = []
+
+        self.default_friction = rigid_shape_props_asset[1].friction
+        self.default_restitution = rigid_shape_props_asset[1].restitution
+        self._init_custom_buffers__()
+
         for i in range(self.num_envs):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))

@@ -42,7 +42,7 @@ import torch
 def play(args):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing
-    env_cfg.env.num_envs = min(env_cfg.env.num_envs, 50)
+    env_cfg.env.num_envs = min(env_cfg.env.num_envs, 100)
     env_cfg.terrain.num_rows = 5
     env_cfg.terrain.num_cols = 5
     env_cfg.terrain.curriculum = False
@@ -52,11 +52,18 @@ def play(args):
 
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
-    obs = env.get_observations()
+    env = HistoryWrapper(env)
+    env.eval = True 
+    env.reset()
+    env.set_commands([1.0,0.0,0.0])
+    obs_dict = env.get_observations()
+    
     # load policy
     train_cfg.runner.resume = True
-    ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg,)
-                                                        #   log_root=args.log_root)
+    ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
+    ppo_runner.load("logs/Hist_Rollout/Oct27_22-21-54_/model_10000.pt")
+    
+
     policy = ppo_runner.get_inference_policy(device=env.device)
     
     # export policy as a jit module (used to run it from C++)
@@ -75,45 +82,86 @@ def play(args):
     camera_direction = np.array(env_cfg.viewer.lookat) - np.array(env_cfg.viewer.pos)
     img_idx = 0
 
-    for i in range(10*int(env.max_episode_length)):
-        actions = policy(obs.detach())
-        obs, _, rews, dones, infos = env.step(actions.detach())
-        if RECORD_FRAMES:
-            if i % 2:
-                filename = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name, 'exported', 'frames', f"{img_idx}.png")
-                env.gym.write_viewer_image_to_file(env.viewer, filename)
-                img_idx += 1 
-        if MOVE_CAMERA:
-            camera_position += camera_vel * env.dt
-            env.set_camera(camera_position, camera_position + camera_direction)
+    obs_list = []; action_list = []; k_out_norm_list = []; k_out_abs_list = []; jac_norm_list = []
 
-        if i < stop_state_log:
-            logger.log_states(
-                {
-                    'dof_pos_target': actions[robot_index, joint_index].item() * env.cfg.control.action_scale,
-                    'dof_pos': env.dof_pos[robot_index, joint_index].item(),
-                    'dof_vel': env.dof_vel[robot_index, joint_index].item(),
-                    'dof_torque': env.torques[robot_index, joint_index].item(),
-                    'command_x': env.commands[robot_index, 0].item(),
-                    'command_y': env.commands[robot_index, 1].item(),
-                    'command_yaw': env.commands[robot_index, 2].item(),
-                    'base_vel_x': env.base_lin_vel[robot_index, 0].item(),
-                    'base_vel_y': env.base_lin_vel[robot_index, 1].item(),
-                    'base_vel_z': env.base_lin_vel[robot_index, 2].item(),
-                    'base_vel_yaw': env.base_ang_vel[robot_index, 2].item(),
-                    'contact_forces_z': env.contact_forces[robot_index, env.feet_indices, 2].cpu().numpy()
-                }
-            )
-        elif i==stop_state_log:
-            logger.plot_states()
-        if  0 < i < stop_rew_log:
-            if infos["episode"]:
-                num_episodes = torch.sum(env.reset_buf).item()
-                if num_episodes>0:
-                    logger.log_rewards(infos["episode"], num_episodes)
-        elif i==stop_rew_log:
-            logger.print_rewards()
+    with torch.inference_mode():
+        for i in range(10*int(env.max_episode_length)):
+            # actions = policy(obs.detach())
+            # actions, k_out, jac_norm = policy(obs.detach()) 
+            # obs = obs_dict['obs']
+            # print("Cmd: ", env.commands)
+            with torch.no_grad():
+                actions = policy(obs_dict,use_student=True,use_pri=False)
+            obs_list.append(obs_dict['obs'].cpu().detach().numpy()); 
+            action_list.append(actions.cpu().detach().numpy())
+            # k_out_norm_list.append((k_out.cpu().detach().numpy() ** 2).mean()); 
+            # k_out_abs_list.append((k_out.cpu().detach().numpy()).mean()); 
+            # jac_norm_list.append(jac_norm.cpu().detach().numpy())
+            if i == env.max_episode_length:
+                break
+            else:
+                print(f"{i}/{env.max_episode_length}")
+            obs_dict, rewards, dones, infos = env.step(actions.detach())
+            if RECORD_FRAMES:
+                if i % 2:
+                    filename = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name, 'exported', 'frames', f"{img_idx}.png")
+                    env.gym.write_viewer_image_to_file(env.viewer, filename)
+                    img_idx += 1 
+            if MOVE_CAMERA:
+                camera_position += camera_vel * env.dt
+                env.set_camera(camera_position, camera_position + camera_direction)
 
+            if i < stop_state_log:
+                logger.log_states(
+                    {
+                        'dof_pos_target': actions[robot_index, joint_index].item() * env.cfg.control.action_scale,
+                        'dof_pos': env.dof_pos[robot_index, joint_index].item(),
+                        'dof_vel': env.dof_vel[robot_index, joint_index].item(),
+                        'dof_torque': env.torques[robot_index, joint_index].item(),
+                        'command_x': env.commands[robot_index, 0].item(),
+                        'command_y': env.commands[robot_index, 1].item(),
+                        'command_yaw': env.commands[robot_index, 2].item(),
+                        'base_vel_x': env.base_lin_vel[robot_index, 0].item(),
+                        'base_vel_y': env.base_lin_vel[robot_index, 1].item(),
+                        'base_vel_z': env.base_lin_vel[robot_index, 2].item(),
+                        'base_vel_yaw': env.base_ang_vel[robot_index, 2].item(),
+                        'contact_forces_z': env.contact_forces[robot_index, env.feet_indices, 2].cpu().numpy()
+                    }
+                )
+            elif i==stop_state_log:
+                logger.plot_states()
+            if  0 < i < stop_rew_log:
+                if infos["episode"]:
+                    num_episodes = torch.sum(env.reset_buf).item()
+                    if num_episodes>0:
+                        logger.log_rewards(infos["episode"], num_episodes)
+            elif i==stop_rew_log:
+                logger.print_rewards()
+        
+    action_arr = np.concatenate(action_list)
+    obs_arr = np.concatenate(obs_list)
+    k_out_norm_arr = np.array(k_out_norm_list)
+    k_out_abs_arr = np.array(k_out_abs_list)
+    jac_norm_arr = np.array(jac_norm_list).flatten()
+    # 绘制图像
+    import matplotlib.pyplot as plt
+    idx = np.arange(action_arr.shape[0])
+    plt.plot(idx, action_arr)
+    plt.title("action")
+    plt.show()
+    
+    plt.plot(idx, k_out_norm_arr, label="k_out_norm_arr")
+    plt.plot(idx, k_out_abs_arr, label="k_out_abs_arr")
+    plt.title("k_out_norm")
+    plt.legend()
+    plt.show()
+    
+    plt.plot(idx, jac_norm_arr)
+    plt.title("jac_norm")
+    plt.show()
+    import pdb; pdb.set_trace()
+    
+    
 if __name__ == '__main__':
     EXPORT_POLICY = False
     RECORD_FRAMES = False

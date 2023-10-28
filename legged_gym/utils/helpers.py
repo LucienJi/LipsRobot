@@ -151,7 +151,7 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
 
 def get_args():
     custom_parameters = [
-        {"name": "--task", "type": str, "default": "go1_lips", "help": "Resume training or start testing from a checkpoint. Overrides config file if provided."},
+        {"name": "--task", "type": str, "default": "go1_prilipsnet", "help": "Resume training or start testing from a checkpoint. Overrides config file if provided."},
         {"name": "--resume", "action": "store_true", "default": False,  "help": "Resume training from a checkpoint"},  # 是否加载policy，play时会强制置为true
         {"name": "--experiment_name", "type": str,  "help": "Name of the experiment to run or load. Overrides config file if provided."},  # log外层文件夹名称，load policy时的外层文件夹名称
         {"name": "--run_name", "type": str,  "help": "Name of the run. Overrides config file if provided."}, # 作为log文件夹的名称后缀  
@@ -164,7 +164,6 @@ def get_args():
         {"name": "--num_envs", "type": int, "help": "Number of environments to create. Overrides config file if provided."},
         {"name": "--seed", "type": int, "help": "Random seed. Overrides config file if provided."},
         {"name": "--max_iterations", "type": int, "help": "Maximum number of training iterations. Overrides config file if provided."},
-        # {"name": "--log_root", "type": str,"defualt":"default", "help": "log_root."},
     ]
     # parse arguments
     args = gymutil.parse_arguments(

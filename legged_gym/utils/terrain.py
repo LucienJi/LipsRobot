@@ -33,7 +33,6 @@ from numpy.random import choice
 from scipy import interpolate
 
 from isaacgym import terrain_utils
-from isaacgym.terrain_utils import random_uniform_terrain
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg
 
 class Terrain:
@@ -88,7 +87,6 @@ class Terrain:
             for i in range(self.cfg.num_rows):
                 difficulty = i / self.cfg.num_rows
                 choice = j / self.cfg.num_cols + 0.001
-
                 terrain = self.make_terrain(choice, difficulty)
                 self.add_terrain_to_map(terrain, i, j)
 
@@ -101,10 +99,10 @@ class Terrain:
             terrain = terrain_utils.SubTerrain("terrain",
                               width=self.width_per_env_pixels,
                               length=self.width_per_env_pixels,
-                              vertical_scale=self.cfg.vertical_scale,
-                              horizontal_scale=self.cfg.horizontal_scale)
+                              vertical_scale=self.vertical_scale,
+                              horizontal_scale=self.horizontal_scale)
 
-            eval(terrain_type)(terrain, **self.cfg.terrain_kwargs)
+            eval(terrain_type)(terrain, **self.cfg.terrain_kwargs.terrain_kwargs)
             self.add_terrain_to_map(terrain, i, j)
     
     def make_terrain(self, choice, difficulty):

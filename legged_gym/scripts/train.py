@@ -30,18 +30,29 @@
 
 import numpy as np
 import os
+import sys, time
 from datetime import datetime
 
 import isaacgym
 from legged_gym.envs import *
 from legged_gym.utils import get_args, task_registry
+
 import torch
 
 def train(args):
     env, env_cfg = task_registry.make_env(name=args.task, args=args)
-    ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args)
+    env = HistoryWrapper(env)
+    # debug python 时不进行log文件记录
+    if sys.gettrace() is None:
+        log_root = "default"
+    else:
+        log_root = None
+        print("[debug] 当前在debug模式下, 设置 log_root=None")
+    ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, log_root=log_root)  # log_root=None
+
     ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
 
 if __name__ == '__main__':
+    print(sys.gettrace())
     args = get_args()
     train(args)

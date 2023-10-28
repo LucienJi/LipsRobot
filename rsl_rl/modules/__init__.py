@@ -30,3 +30,5 @@
 
 from .actor_critic import ActorCritic
 from .actor_critic_recurrent import ActorCriticRecurrent
+from .actor_critic_lipsnet import ActorCriticLipsNet
+from .actor_critic_pri_lipsnet import ActorCriticPriLipsNet

@@ -36,7 +36,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 # from functorch import jacrev, vmap
 
-class Go1RoughCfgLipsNet( LeggedRobotCfg ):
+class Go1RoughCfgPriLipsNet( LeggedRobotCfg ):
+    class env:
+        num_envs = 4096
+        num_observations = 48
+        num_privileged_obs = 187+ 3 # if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise 
+        num_actions = 12
+        env_spacing = 3.  # not used with heightfields/trimeshes 
+        send_timeouts = True # send time out information to the algorithm
+        episode_length_s = 20 # episode length in seconds
+        num_observation_history = 10
+
+        priv_observe_friction = True #! 1
+        priv_observe_restitution = True #! 1 
+        priv_observe_base_mass = True #! 1
+        priv_observe_com_displacement = False #! 3
+
     class init_state( LeggedRobotCfg.init_state ):
         pos = [0.0, 0.0, 0.42] # x,y,z [m]
         default_joint_angles = { # = target angles [rad] when action = 0.0
@@ -77,8 +92,8 @@ class Go1RoughCfgLipsNet( LeggedRobotCfg ):
         num_rows= 10 # number of terrain rows (levels)
         num_cols = 20 # number of terrain cols (types)
         # terrain types: [smooth slope, rough slope, stairs up, stairs down, discrete]
-        terrain_proportions = [0, 1, 0, 0, 0, 0, 0, 0]  # caozhanxiang提供的地形
-        # terrain_proportions = [0.1, 0.1, 0.35, 0.25, 0.2]
+        # terrain_proportions = [0, 1, 0, 0, 0, 0, 0, 0]  # caozhanxiang提供的地形
+        terrain_proportions = [0.1, 0.1, 0.35, 0.25, 0.2]
         # trimesh only:
         slope_treshold = 0.75 # slopes above this threshold will be corrected to vertical surfaces
 
@@ -105,7 +120,9 @@ class Go1RoughCfgLipsNet( LeggedRobotCfg ):
         base_height_target = 0.25
         
         #TODO: 这个会clip 负的reward
-        only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
+        only_positive_rewards = False # if true negative total rewards are clipped at zero (avoids early termination problems)
+        only_positive_rewards_ji22_style = True
+        sigma_rew_neg = 0.02
         tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
         soft_dof_vel_limit = 1.
         soft_torque_limit = 1.
@@ -124,7 +141,7 @@ class Go1RoughCfgLipsNet( LeggedRobotCfg ):
             dof_vel = -0.
             dof_acc = -5e-7 # -2.5e-7
             base_height = -0. 
-            feet_air_time = 1.0 # 1.0
+            feet_air_time = 0.0 # 1.0
             collision = -1. # -1.0
             feet_stumble = -0.0 
             action_rate = 0.0# -0.01 # -0.01 #TODO: 暂时删除action震荡的penalty
@@ -135,10 +152,10 @@ class Go1RoughCfgLipsNet( LeggedRobotCfg ):
         max_curriculum = 3.
         num_commands = 4 # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
         resampling_time = 10. # time before command are changed[s]
-        heading_command = True # if true: compute ang vel command from heading error
+        heading_command = False # if true: compute ang vel command from heading error
         class ranges:
-            lin_vel_x = [-1.0, 1.0] # min max [m/s]
-            lin_vel_y = [-1.0, 1.0]   # min max [m/s]
+            lin_vel_x = [-1.0, 1.2] # min max [m/s]
+            lin_vel_y = [-0.5, 0.5]   # min max [m/s]
             ang_vel_yaw = [-1, 1]    # min max [rad/s]
             heading = [-3.14, 3.14]
             
@@ -147,35 +164,39 @@ class Go1RoughCfgLipsNet( LeggedRobotCfg ):
         friction_range = [0.5, 1.25]
         randomize_base_mass = True
         added_mass_range = [-2., 2.]
+        randomize_restitution = True
+        restitution_range = [0.0, 0.4]
+        randomize_com_displacement = True 
+        com_displacement_range = [-0.05, 0.05]
         push_robots = True
         push_interval_s = 15
         max_push_vel_xy = 1.
         
-class Go1RoughCfgPPOLipsNet(BaseConfig): # 不继承之前的训练配置，防止污染
+class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，防止污染
     seed = 1
     runner_class_name = 'OnPolicyRunner'
     
     class policy: #( LeggedRobotCfgPPO.policy ):
         init_noise_std = 1.0
-        # actor_hidden_dims = [512, 256, 128] #TODO: 注意修改网络结构
-        # critic_hidden_dims = [512, 256, 128]
-        # activation = 'lrelu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
-        ## actor-f 函数设计
+        actor_hidden_dims = [512, 256, 128] #TODO: 注意修改网络结构
+        critic_hidden_dims = [512, 256, 128]
+        adaptation_module_branch_hidden_dims = [256, 128]
+        activation = 'lrelu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
+        # actor-f 函数设计
         actor_f_hid_dims = [512, 256, 128]
         actor_f_hid_nonlinear = 'lrelu'
         actor_f_out_nonlinear = 'identity'
-        ## actor-k 函数设计
+        # actor-k 函数设计
         actor_global_lips = False
+        actor_multi_k = True 
         actor_k_init = 50
-        actor_k_hid_dims = [512, 256, 128, 1]
+        actor_k_hid_dims = [512, 256, 128]
         actor_k_hid_nonlinear = 'tanh'
         actor_k_out_nonlinear = 'softplus'
         actor_eps = 1e-4
         actor_loss_lambda = None
         actor_squash_action = False
-        ## critic 函数设计
-        critic_hidden_dims = [512, 256, 128]
-        critic_activation = 'elu'
+        use_lips = True 
         
         
     class algorithm: #( LeggedRobotCfgPPO.algorithm ):
@@ -185,15 +206,19 @@ class Go1RoughCfgPPOLipsNet(BaseConfig): # 不继承之前的训练配置，防�
         clip_param = 0.2
         entropy_coef = 0.01
         #TODO: 重要 k_out norm loss coef 
-        lips_loss_coef = 1e-5 #1e-5
+        lips_loss_coef = 1e-4 #1e-5
         num_learning_epochs = 5
         num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
         # 调整学习率
         # learning_rate = 1.e-3 #5.e-4
-        learning_rate = None
+        # learning_rate = None
         learning_rate_actor_f = 1.e-3
         learning_rate_actor_k = 1.e-5
         learning_rate_critic = 1.e-3
+
+        learning_rate_teacher = 1.e-5
+        learning_rate_student = 1.e-5
+        adaptation_module_learning_rate = 1.e-4
         #TODO: schedule 会控制learning rate的变化
         schedule = 'adaptive' # could be adaptive, fixed 
         gamma = 0.99
@@ -202,14 +227,14 @@ class Go1RoughCfgPPOLipsNet(BaseConfig): # 不继承之前的训练配置，防�
         max_grad_norm = 1.
 
     class runner: #( LeggedRobotCfgPPO.runner ):
-        policy_class_name = 'ActorCriticLipsNet'
-        algorithm_class_name = 'PPOLipsNet'
+        policy_class_name = 'ActorCriticPriLipsNet'
+        algorithm_class_name = 'PPOPriLipsNet'
         num_steps_per_env = 24 # per iteration
         max_iterations = 5000 # number of policy updates
 
         # logging
         save_interval = 100 # check for potential saves every this many iterations
-        experiment_name = 'go1_lipsnet'
+        experiment_name = 'Hist_Rollout'
         run_name = ''
         
         # load and resume
