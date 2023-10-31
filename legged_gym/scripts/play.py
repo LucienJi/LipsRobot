@@ -59,9 +59,9 @@ def play(args):
     obs_dict = env.get_observations()
     
     # load policy
-    train_cfg.runner.resume = True
+    train_cfg.runner.resume = False
     ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
-    ppo_runner.load("logs/Lips_Single_K/Oct31_09-50-14_/model_0.pt")
+    ppo_runner.load("logs/Lips_Single_K_NoDAgger/Oct31_10-54-52_/model_9000.pt")
     
 
     policy = ppo_runner.get_inference_policy(device=env.device)

@@ -242,16 +242,16 @@ class PPOPriLipsNet:
                     mean_value_loss += value_loss.item()
                     mean_surrogate_loss += surrogate_loss.item()
 
-                    #! adaptation loss 
-                    with torch.no_grad():
-                        adaptation_target = self.actor_critic.get_teacher_latent(obs_batch, pri_obs_batch)
-                    adaptation_pred = self.actor_critic.get_student_latent(obs_history_batch)
-                    adaptation_loss = F.mse_loss(adaptation_pred, adaptation_target)
-                    self.adaptation_module_optimizer.zero_grad()
-                    adaptation_loss.backward()
-                    nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
-                    self.adaptation_module_optimizer.step()
-                    mean_adaptation_loss += adaptation_loss.item()
+                    # #! adaptation loss 
+                    # with torch.no_grad():
+                    #     adaptation_target = self.actor_critic.get_teacher_latent(obs_batch, pri_obs_batch)
+                    # adaptation_pred = self.actor_critic.get_student_latent(obs_history_batch)
+                    # adaptation_loss = F.mse_loss(adaptation_pred, adaptation_target)
+                    # self.adaptation_module_optimizer.zero_grad()
+                    # adaptation_loss.backward()
+                    # nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+                    # self.adaptation_module_optimizer.step()
+                    # mean_adaptation_loss += adaptation_loss.item()
 
                 if update_student:
                     #! behavior cloning

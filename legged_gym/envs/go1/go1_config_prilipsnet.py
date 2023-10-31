@@ -171,6 +171,17 @@ class Go1RoughCfgPriLipsNet( LeggedRobotCfg ):
         push_robots = True
         push_interval_s = 15
         max_push_vel_xy = 1.
+
+    class noise:
+        add_noise = True # 是否要在obs上添加噪音
+        noise_level = 1.0 # scales other values
+        class noise_scales: # 具体每个obs的噪音的scale
+            dof_pos = 0.01
+            dof_vel = 1.5
+            lin_vel = 0.1
+            ang_vel = 0.2
+            gravity = 0.05
+            height_measurements = 0.1
         
 class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，防止污染
     seed = 1
@@ -210,7 +221,7 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         num_learning_epochs = 5
         num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
         # 调整学习率
-        DAgger_coef = 1.0
+        DAgger_coef = 0.8
         learning_rate_actor_f = 1.e-5
         learning_rate_actor_k = 1.e-5
         learning_rate_critic = 1.e-3
@@ -233,7 +244,7 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
 
         # logging
         save_interval = 500 # check for potential saves every this many iterations
-        experiment_name = 'Lips_Single_K_NoDAgger' # name of the experiment
+        experiment_name = 'Lips_Single_K' # name of the experiment
         run_name = ''
         
         # load and resume
