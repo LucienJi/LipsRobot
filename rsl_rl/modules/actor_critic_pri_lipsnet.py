@@ -54,6 +54,7 @@ class ActorCriticPriLipsNet(nn.Module):
                  actor_f_hid_nonlinear = 'lrelu',
                  actor_f_out_nonlinear = 'identity',
                  ## actor-k 函数设计
+                 k_lips = False,
                  actor_global_lips = False,
                  actor_multi_k = True, 
                  actor_k_init = 10,
@@ -123,7 +124,7 @@ class ActorCriticPriLipsNet(nn.Module):
             if actor_multi_k:
                 actor_k_hid_dims += [num_actions]
             else:
-                actor_k_hid_dims = [1]
+                actor_k_hid_dims += [1]
             self.actor_student = LipsNet(f_sizes = [mlp_student_input_a, *actor_f_hid_dims, num_actions],
                   f_hid_nonlinear = get_activation(actor_f_hid_nonlinear), 
                   f_out_nonlinear = get_activation(actor_f_out_nonlinear),
@@ -134,7 +135,8 @@ class ActorCriticPriLipsNet(nn.Module):
                   k_out_nonlinear = get_activation(actor_k_out_nonlinear),
                   loss_lambda = actor_loss_lambda, 
                   eps = actor_eps, 
-                  squash_action = actor_squash_action)
+                  squash_action = actor_squash_action,
+                  k_lips=k_lips)
         else:
             actor_layers = []
             actor_layers.append(nn.Linear(mlp_student_input_a, actor_hidden_dims[0]))

@@ -106,7 +106,7 @@ class OnPolicyRunner:
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
-                    actions = self.alg.act(obs_dict['obs'], obs_dict['privileged_obs'], obs_dict['obs_history'],use_student=False,use_privileged_obs=False)
+                    actions = self.alg.act(obs_dict['obs'], obs_dict['privileged_obs'], obs_dict['obs_history'],use_privileged_obs=False)
                     obs_dict, rewards, dones, infos = self.env.step(actions)
                     for k,v in obs_dict.items():
                         obs_dict[k] = v.to(self.device)

@@ -61,10 +61,11 @@ class PPOPriLipsNet:
                  learning_rate_actor_k = 1.e-5,
                  learning_rate_critic = 1.e-3,
                  adaptation_module_learning_rate = 1.e-3,
+                 DAgger_coef = 1.0,
                  ):
 
         self.device = device
-
+        self.DAgger_coef = DAgger_coef
         self.desired_kl = desired_kl
         self.schedule = schedule
         self.learning_rate = learning_rate
@@ -138,9 +139,11 @@ class PPOPriLipsNet:
     def train_mode(self):
         self.actor_critic.train()
 
-    def act(self, obs, privileged_obs, obs_history, use_student = False, use_privileged_obs = False):
+    def act(self, obs, privileged_obs, obs_history, use_privileged_obs = False):
         # Compute the actions and values
-        if use_student:
+        # use expert policy with probability of self.DAgger_coef
+        use_expert = torch.rand(1).item() < self.DAgger_coef
+        if not use_expert:
             self.transition.actions = self.actor_critic.act_student(obs,privileged_obs,obs_history,get_info=False)
         else:
             self.transition.actions = self.actor_critic.act_teacher(obs,privileged_obs,obs_history, use_privileged_obs=use_privileged_obs).detach()
@@ -280,16 +283,16 @@ class PPOPriLipsNet:
                     self.student_optimizer.step()
                     mean_student_neglogp += neglogp.item()
 
-                    #! adaptation loss 
-                    with torch.no_grad():
-                        adaptation_target = self.actor_critic.get_teacher_latent(obs_batch, pri_obs_batch)
-                    adaptation_pred = self.actor_critic.get_student_latent(obs_history_batch)
-                    adaptation_loss = F.mse_loss(adaptation_pred, adaptation_target)
-                    self.adaptation_module_optimizer.zero_grad()
-                    adaptation_loss.backward()
-                    nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
-                    self.adaptation_module_optimizer.step()
-                    mean_adaptation_loss += adaptation_loss.item()
+                    # #! adaptation loss 
+                    # with torch.no_grad():
+                    #     adaptation_target = self.actor_critic.get_teacher_latent(obs_batch, pri_obs_batch)
+                    # adaptation_pred = self.actor_critic.get_student_latent(obs_history_batch)
+                    # adaptation_loss = F.mse_loss(adaptation_pred, adaptation_target)
+                    # self.adaptation_module_optimizer.zero_grad()
+                    # adaptation_loss.backward()
+                    # nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+                    # self.adaptation_module_optimizer.step()
+                    # mean_adaptation_loss += adaptation_loss.item()
 
                     
 

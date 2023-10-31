@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from functorch import jacrev, vmap
-
+from torch.func import jacrev
+from torch import vmap 
 
 def mlp(sizes, hid_nonlinear, out_nonlinear):
     # declare layers
@@ -23,9 +23,11 @@ def mlp(sizes, hid_nonlinear, out_nonlinear):
 
 
 class K_net(nn.Module):
-    def __init__(self, global_lips, k_init, sizes, hid_nonlinear, out_nonlinear) -> None:
+    def __init__(self, global_lips, k_init, sizes, hid_nonlinear, out_nonlinear,k_lips = False,eps=1e-4) -> None:
         super().__init__()
         self.global_lips = global_lips
+        self.k_lips = k_lips
+        self.eps = eps 
         if global_lips:
             # declare global Lipschitz constant
             self.k = torch.nn.Parameter(torch.tensor(k_init, dtype=torch.float), requires_grad=True)
@@ -39,7 +41,17 @@ class K_net(nn.Module):
         if self.global_lips:
             return F.softplus(self.k).repeat(x.shape[0]).unsqueeze(1)
         else:
-            return self.k(x)
+            if not self.k_lips:
+                return self.k(x)
+            else:
+                k_out = self.k(x) 
+                if k_out.requires_grad:
+                    jacobi = vmap(jacrev(self.k))(x)
+                else:
+                    with torch.no_grad():
+                        jacobi = vmap(jacrev(self.k))(x)
+                jac_norm = torch.norm(jacobi, 2, dim=(1,2)).unsqueeze(1)
+                return k_out / (jac_norm + self.eps)
         
 
 class LipsNet(nn.Module):
@@ -52,13 +64,13 @@ class LipsNet(nn.Module):
                  k_sizes=None, 
                  k_hid_nonlinear=nn.Tanh,
                  k_out_nonlinear=nn.Identity,
-                 loss_lambda=0.1,
+                 k_lips=False,
                  eps=1e-4,
                  squash_action=True) -> None:
         super().__init__()
         # declare network
         self.f_net = mlp(f_sizes, f_hid_nonlinear, f_out_nonlinear)
-        self.k_net = K_net(global_lips, k_init, k_sizes, k_hid_nonlinear, k_out_nonlinear)
+        self.k_net = K_net(global_lips, k_init, k_sizes, k_hid_nonlinear, k_out_nonlinear,k_lips = k_lips)
         # declare hyperparameters
         # self.loss_lambda = loss_lambda # 不在正向传播时进行计算 K regularizer
         self.eps = eps
@@ -90,11 +102,6 @@ class LipsNet(nn.Module):
         # squash action
         if self.squash_action:
             action = torch.tanh(action)
-        # 在需要训练时传出k_out用于训练
-        # print("action=", action)
-        # print("f_out=", f_out)
-        # print("k_out=", k_out)
-        # print("jac_norm=", jac_norm)
         if get_info:
             return action, k_out, jac_norm
         else:

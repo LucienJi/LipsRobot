@@ -61,7 +61,7 @@ def play(args):
     # load policy
     train_cfg.runner.resume = True
     ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
-    ppo_runner.load("logs/Hist_Rollout/Oct27_22-21-54_/model_10000.pt")
+    ppo_runner.load("logs/Lips_Single_K/Oct31_09-50-14_/model_0.pt")
     
 
     policy = ppo_runner.get_inference_policy(device=env.device)
@@ -91,7 +91,7 @@ def play(args):
             # obs = obs_dict['obs']
             # print("Cmd: ", env.commands)
             with torch.no_grad():
-                actions = policy(obs_dict,use_student=False,use_pri=False)
+                actions = policy(obs_dict,use_student=True,use_pri=False)
             obs_list.append(obs_dict['obs'].cpu().detach().numpy()); 
             action_list.append(actions.cpu().detach().numpy())
             # k_out_norm_list.append((k_out.cpu().detach().numpy() ** 2).mean()); 
@@ -141,9 +141,9 @@ def play(args):
         
     action_arr = np.concatenate(action_list)
     obs_arr = np.concatenate(obs_list)
-    k_out_norm_arr = np.array(k_out_norm_list)
-    k_out_abs_arr = np.array(k_out_abs_list)
-    jac_norm_arr = np.array(jac_norm_list).flatten()
+    # k_out_norm_arr = np.array(k_out_norm_list)
+    # k_out_abs_arr = np.array(k_out_abs_list)
+    # jac_norm_arr = np.array(jac_norm_list).flatten()
     # 绘制图像
     import matplotlib.pyplot as plt
     idx = np.arange(action_arr.shape[0])
@@ -151,15 +151,15 @@ def play(args):
     plt.title("action")
     plt.show()
     
-    plt.plot(idx, k_out_norm_arr, label="k_out_norm_arr")
-    plt.plot(idx, k_out_abs_arr, label="k_out_abs_arr")
-    plt.title("k_out_norm")
-    plt.legend()
-    plt.show()
+    # plt.plot(idx, k_out_norm_arr, label="k_out_norm_arr")
+    # plt.plot(idx, k_out_abs_arr, label="k_out_abs_arr")
+    # plt.title("k_out_norm")
+    # plt.legend()
+    # plt.show()
     
-    plt.plot(idx, jac_norm_arr)
-    plt.title("jac_norm")
-    plt.show()
+    # plt.plot(idx, jac_norm_arr)
+    # plt.title("jac_norm")
+    # plt.show()
     import pdb; pdb.set_trace()
     
     

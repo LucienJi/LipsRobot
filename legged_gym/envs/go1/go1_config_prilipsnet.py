@@ -187,11 +187,12 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         actor_f_hid_nonlinear = 'lrelu'
         actor_f_out_nonlinear = 'identity'
         # actor-k 函数设计
+        k_lips = False
         actor_global_lips = False
-        actor_multi_k = True 
+        actor_multi_k = False 
         actor_k_init = 50
         actor_k_hid_dims = [512, 256, 128]
-        actor_k_hid_nonlinear = 'tanh'
+        actor_k_hid_nonlinear = 'lrelu'
         actor_k_out_nonlinear = 'softplus'
         actor_eps = 1e-4
         actor_loss_lambda = None
@@ -206,13 +207,14 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         clip_param = 0.2
         entropy_coef = 0.01
         #TODO: 重要 k_out norm loss coef 
-        lips_loss_coef = 1e-4 #1e-5
+        lips_loss_coef = 1e-5 #1e-5
         num_learning_epochs = 5
         num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
         # 调整学习率
         # learning_rate = 1.e-3 #5.e-4
         # learning_rate = None
-        learning_rate_actor_f = 1.e-3
+        DAgger_coef = 0.8
+        learning_rate_actor_f = 1.e-5
         learning_rate_actor_k = 1.e-5
         learning_rate_critic = 1.e-3
 
@@ -234,7 +236,7 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
 
         # logging
         save_interval = 100 # check for potential saves every this many iterations
-        experiment_name = 'Hist_Rollout'
+        experiment_name = 'Lips_Single_K'
         run_name = ''
         
         # load and resume

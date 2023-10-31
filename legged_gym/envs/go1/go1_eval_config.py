@@ -97,7 +97,7 @@ class Go1RoughCfgEval( Go1RoughCfgPriLipsNet ):
         push_interval_s = 15
         max_push_vel_xy = 1.
         
-class Go1RoughCfgPPOEval(Go1RoughCfgPPOPriLipsNet): # 不继承之前的训练配置，防止污染
+class Go1RoughCfgPPOEval(Go1RoughCfgPPOPriLipsNet): 
     seed = 1
     runner_class_name = 'OnPolicyRunner'
 
