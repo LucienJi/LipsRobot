@@ -92,8 +92,8 @@ class Go1RoughCfgPriLipsNet( LeggedRobotCfg ):
         num_rows= 10 # number of terrain rows (levels)
         num_cols = 20 # number of terrain cols (types)
         # terrain types: [smooth slope, rough slope, stairs up, stairs down, discrete]
-        # terrain_proportions = [0, 1, 0, 0, 0, 0, 0, 0]  # caozhanxiang提供的地形
-        terrain_proportions = [0.1, 0.1, 0.35, 0.25, 0.2]
+        terrain_proportions = [0, 1, 0, 0, 0, 0, 0, 0]  # caozhanxiang提供的地形
+        # terrain_proportions = [0.1, 0.1, 0.35, 0.25, 0.2]
         # trimesh only:
         slope_treshold = 0.75 # slopes above this threshold will be corrected to vertical surfaces
 
@@ -195,7 +195,6 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         actor_k_hid_nonlinear = 'lrelu'
         actor_k_out_nonlinear = 'softplus'
         actor_eps = 1e-4
-        actor_loss_lambda = None
         actor_squash_action = False
         use_lips = True 
         
@@ -211,9 +210,7 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         num_learning_epochs = 5
         num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
         # 调整学习率
-        # learning_rate = 1.e-3 #5.e-4
-        # learning_rate = None
-        DAgger_coef = 0.8
+        DAgger_coef = 1.0
         learning_rate_actor_f = 1.e-5
         learning_rate_actor_k = 1.e-5
         learning_rate_critic = 1.e-3
@@ -235,8 +232,8 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         max_iterations = 5000 # number of policy updates
 
         # logging
-        save_interval = 100 # check for potential saves every this many iterations
-        experiment_name = 'Lips_Single_K'
+        save_interval = 500 # check for potential saves every this many iterations
+        experiment_name = 'Lips_Single_K_NoDAgger' # name of the experiment
         run_name = ''
         
         # load and resume

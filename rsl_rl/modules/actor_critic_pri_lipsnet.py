@@ -62,7 +62,6 @@ class ActorCriticPriLipsNet(nn.Module):
                  actor_k_hid_nonlinear = 'tanh',
                  actor_k_out_nonlinear = 'softplus',
                  actor_eps = 1e-4,
-                 actor_loss_lambda = 0.001,
                  actor_squash_action = False,
                  ## others
                  use_lips = True,
@@ -133,7 +132,6 @@ class ActorCriticPriLipsNet(nn.Module):
                   k_sizes = [mlp_student_input_a, *actor_k_hid_dims], 
                   k_hid_nonlinear = get_activation(actor_k_hid_nonlinear), 
                   k_out_nonlinear = get_activation(actor_k_out_nonlinear),
-                  loss_lambda = actor_loss_lambda, 
                   eps = actor_eps, 
                   squash_action = actor_squash_action,
                   k_lips=k_lips)
@@ -211,9 +209,12 @@ class ActorCriticPriLipsNet(nn.Module):
         student_latent = self.student_adaptation_module(obs_history)
         student_input = torch.cat((obs, student_latent), dim=-1)
         if self.use_lips:
-            action_mean,k_out, jac_norm = self.actor_student.forward(student_input,get_info = get_info)
+            action_mean,k_out, jac_norm = self.actor_student.forward(student_input,get_info = True)
             self.distribution = Normal(action_mean, action_mean*0. + self.std)
-            return self.distribution.sample(), k_out, jac_norm
+            if get_info:
+                return self.distribution.sample(), k_out, jac_norm
+            else:
+                return self.distribution.sample()
         else:
             action_mean = self.actor_student.forward(student_input)
         self.distribution = Normal(action_mean, action_mean*0. + self.std)

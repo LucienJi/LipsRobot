@@ -139,7 +139,7 @@ class PPOPriLipsNet:
     def train_mode(self):
         self.actor_critic.train()
 
-    def act(self, obs, privileged_obs, obs_history, use_privileged_obs = False):
+    def act(self, obs, privileged_obs, obs_history, use_privileged_obs = True):
         # Compute the actions and values
         # use expert policy with probability of self.DAgger_coef
         use_expert = torch.rand(1).item() < self.DAgger_coef
