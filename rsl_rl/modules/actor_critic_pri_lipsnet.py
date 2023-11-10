@@ -48,7 +48,7 @@ class ActorCriticPriLipsNet(nn.Module):
                  actor_hidden_dims = [512, 256, 128],
                  critic_hidden_dims = [512, 256, 128],
                  adaptation_module_branch_hidden_dims = [256, 128],
-                 latent_dim = 64,
+                 latent_dim = 16,
                  ## actor-f 函数设计
                  actor_f_hid_dims = [512, 256, 128],
                  actor_f_hid_nonlinear = 'lrelu',
@@ -103,22 +103,8 @@ class ActorCriticPriLipsNet(nn.Module):
         self.actor_teacher = nn.Sequential(*actor_layers)
 
         # Student Policy
-        ## EnvEncoder
-        adaptation_module_layers = []
-        adaptation_module_layers.append(nn.Linear(self.num_obs_history, adaptation_module_branch_hidden_dims[0]))
-        adaptation_module_layers.append(activation)
-        for l in range(len(adaptation_module_branch_hidden_dims)):
-            if l == len(adaptation_module_branch_hidden_dims) - 1:
-                adaptation_module_layers.append(
-                    nn.Linear(adaptation_module_branch_hidden_dims[l],latent_dim)) #! latent_dim
-            else:
-                adaptation_module_layers.append(
-                    nn.Linear(adaptation_module_branch_hidden_dims[l],
-                              adaptation_module_branch_hidden_dims[l + 1]))
-                adaptation_module_layers.append(activation)
-        self.student_adaptation_module = nn.Sequential(*adaptation_module_layers)
 
-        mlp_student_input_a = num_obs + latent_dim
+        mlp_student_input_a = num_obs + self.num_obs_history
         if use_lips:
             if actor_multi_k:
                 actor_k_hid_dims += [num_actions]
@@ -162,15 +148,15 @@ class ActorCriticPriLipsNet(nn.Module):
 
         # Action noise
         self.std = nn.Parameter(init_noise_std * torch.ones(num_actions))
+        self.student_std = nn.Parameter(init_noise_std * torch.ones(num_actions))
         self.distribution = None
         # disable args validation for speedup
         Normal.set_default_validate_args = False
         
-        self.teacher_adaptation_module.apply(init_orhtogonal)
-        self.student_adaptation_module.apply(init_orhtogonal)
-        self.actor_student.apply(init_orhtogonal)
-        self.actor_teacher.apply(init_orhtogonal)
-        self.critic.apply(init_orhtogonal)
+        # self.teacher_adaptation_module.apply(init_orhtogonal)
+        # self.actor_student.apply(init_orhtogonal)
+        # self.actor_teacher.apply(init_orhtogonal)
+        # self.critic.apply(init_orhtogonal)
 
         print("actor_student: ", self.actor_student)
         print("actor_teacher: ", self.actor_teacher)
@@ -206,26 +192,22 @@ class ActorCriticPriLipsNet(nn.Module):
     def act_student(self, obs, privileged_obs, obs_history,get_info = False):
         # obs_dict: obs, obs_history, privileged_obs
         obs_history = obs_history.reshape(-1, self.num_obs_history)
-        student_latent = self.student_adaptation_module(obs_history)
-        student_input = torch.cat((obs, student_latent), dim=-1)
+        student_input = torch.cat((obs, obs_history), dim=-1)
         if self.use_lips:
             action_mean,k_out, jac_norm = self.actor_student.forward(student_input,get_info = True)
-            self.distribution = Normal(action_mean, action_mean*0. + self.std)
+            self.distribution = Normal(action_mean, action_mean*0. + self.student_std)
             if get_info:
                 return self.distribution.sample(), k_out, jac_norm
             else:
                 return self.distribution.sample()
         else:
             action_mean = self.actor_student.forward(student_input)
-        self.distribution = Normal(action_mean, action_mean*0. + self.std)
-        return self.distribution.sample()
+            self.distribution = Normal(action_mean, action_mean*0. + self.student_std)
+            return self.distribution.sample()
 
     def act_teacher(self, obs, privileged_obs , obs_history, use_privileged_obs = True):
         # obs_dict: obs, obs_history, privileged_obs
-        if use_privileged_obs:
-            latent = self.get_teacher_latent(obs,privileged_obs)
-        else:
-            latent = self.get_student_latent(obs_history)
+        latent = self.get_teacher_latent(obs,privileged_obs)
         teacher_input = torch.cat((obs, latent), dim=-1)
         action_mean = self.actor_teacher.forward(teacher_input)
         self.distribution = Normal(action_mean, action_mean*0. + self.std)
@@ -234,17 +216,15 @@ class ActorCriticPriLipsNet(nn.Module):
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
-    def act_inference(self, obs_dict:dict,use_pri = True, use_student=True):
+    def act_inference(self, obs_dict:dict, use_student=True):
         obs,pri_obs = obs_dict['obs'], obs_dict['privileged_obs']
         obs_history = obs_dict['obs_history'].reshape(-1, self.num_obs_history)
-        if use_pri:
-            latent = self.get_teacher_latent(obs,pri_obs)
-        else:
-            latent = self.get_student_latent(obs_history)
+        
         if use_student:
-            student_input = torch.cat((obs, latent), dim=-1)
+            student_input = torch.cat((obs, obs_history), dim=-1)
             actions_mean = self.actor_student.forward(student_input)
         else:
+            latent = self.get_teacher_latent(obs,pri_obs)
             teacher_input = torch.cat((obs, latent), dim=-1)
             actions_mean = self.actor_teacher.forward(teacher_input)
         return actions_mean
@@ -253,11 +233,6 @@ class ActorCriticPriLipsNet(nn.Module):
         input = torch.cat((critic_observations, privileged_obs), dim=-1)
         value = self.critic(input)
         return value
-    
-    def get_student_latent(self,obs_history):
-        obs_history = obs_history.reshape(-1, self.num_obs_history)
-        student_latent = self.student_adaptation_module(obs_history)
-        return student_latent
     def get_teacher_latent(self,obs,privileged_obs):
         input = torch.cat((obs, privileged_obs), dim=-1)
         teacher_latent = self.teacher_adaptation_module(input)

@@ -53,7 +53,7 @@ def play(args):
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
     env = HistoryWrapper(env)
-    env.set_eval(True)
+    env.set_eval(False)
     env.reset()
     env.set_commands([0.5,0.0,0.0])
     obs_dict = env.get_observations()
@@ -61,7 +61,7 @@ def play(args):
     # load policy
     train_cfg.runner.resume = False
     ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
-    ppo_runner.load("logs/Lips_Single_K_NoDAgger/Oct31_10-54-52_/model_9000.pt")
+    ppo_runner.load("logs/Lips_Debug_v4_multi_k/Nov10_00-20-21_/model_10000.pt")
     
 
     policy = ppo_runner.get_inference_policy(device=env.device)
@@ -91,7 +91,7 @@ def play(args):
             # obs = obs_dict['obs']
             # print("Cmd: ", env.commands)
             with torch.no_grad():
-                actions = policy(obs_dict,use_student=True,use_pri=False)
+                actions = policy(obs_dict,use_student=True)
             obs_list.append(obs_dict['obs'].cpu().detach().numpy()); 
             action_list.append(actions.cpu().detach().numpy())
             # k_out_norm_list.append((k_out.cpu().detach().numpy() ** 2).mean()); 

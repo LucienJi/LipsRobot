@@ -92,20 +92,19 @@ class PPOPriLipsNet:
     
         if self.use_lips:
             self.student_optimizer = torch.optim.Adam([
-                {'params':self.actor_critic.student_adaptation_module.parameters(), 'lr':'inf', 'lr_name':'learning_rate_teacher',},
                 {'params':self.actor_critic.actor_student.f_net.parameters(), 'lr':'inf', 'lr_name':'learning_rate_actor_f',},
                 # TODO: 这里 actor_critic.std 使用跟actor_f相同的学习率
+                {'params':self.actor_critic.student_std, 'lr':'inf', 'lr_name':"learning_rate_actor_f",},
                 {'params':self.actor_critic.actor_student.k_net.parameters(), 'lr':'inf', 'lr_name':"learning_rate_actor_k",},
                 ])
         else:
             self.student_optimizer = torch.optim.Adam(
-                [   {'params':self.actor_critic.student_adaptation_module.parameters(), 'lr':'inf', 'lr_name':'learning_rate_teacher',},
+                [ 
                     {'params':self.actor_critic.actor_student.parameters(), 'lr':'inf', 'lr_name':'learning_rate_student',},
+                    {'params':self.actor_critic.student_std, 'lr':'inf', 'lr_name':"learning_rate_student",},
                 ]
             )
-        self.adaptation_module_optimizer = optim.Adam(self.actor_critic.student_adaptation_module.parameters(),
-                                                      lr=self.adaptation_module_learning_rate)
-        
+
         self.update_learning_rate(self.teacher_optimizer)
         self.update_learning_rate(self.student_optimizer)
 
@@ -134,7 +133,7 @@ class PPOPriLipsNet:
         self.storage = RolloutPriStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, obs_history_shape, action_shape, self.device)
 
     def test_mode(self):
-        self.actor_critic.test()
+        self.actor_critic.eval()
     
     def train_mode(self):
         self.actor_critic.train()
@@ -146,7 +145,7 @@ class PPOPriLipsNet:
         if not use_expert:
             self.transition.actions = self.actor_critic.act_student(obs,privileged_obs,obs_history,get_info=False)
         else:
-            self.transition.actions = self.actor_critic.act_teacher(obs,privileged_obs,obs_history, use_privileged_obs=use_privileged_obs).detach()
+            self.transition.actions = self.actor_critic.act_teacher(obs,privileged_obs,obs_history).detach()
         self.transition.values = self.actor_critic.evaluate( obs, privileged_obs).detach()
         self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.actor_critic.action_mean.detach()
@@ -242,24 +241,14 @@ class PPOPriLipsNet:
                     mean_value_loss += value_loss.item()
                     mean_surrogate_loss += surrogate_loss.item()
 
-                    # #! adaptation loss 
-                    # with torch.no_grad():
-                    #     adaptation_target = self.actor_critic.get_teacher_latent(obs_batch, pri_obs_batch)
-                    # adaptation_pred = self.actor_critic.get_student_latent(obs_history_batch)
-                    # adaptation_loss = F.mse_loss(adaptation_pred, adaptation_target)
-                    # self.adaptation_module_optimizer.zero_grad()
-                    # adaptation_loss.backward()
-                    # nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
-                    # self.adaptation_module_optimizer.step()
-                    # mean_adaptation_loss += adaptation_loss.item()
-
                 if update_student:
                     #! behavior cloning
+                    loss = 0.0
                     with torch.no_grad():
                         self.actor_critic.act_teacher(obs_batch,pri_obs_batch,obs_history_batch,use_privileged_obs=True)
                         target_action = self.actor_critic.action_mean.detach() 
                     if self.use_lips:
-                        loss = 0.0
+                        
                         _, k_out, jac_norm = self.actor_critic.act_student(obs_batch,pri_obs_batch,obs_history_batch, get_info=True)
                         k_l2 = self.lips_loss_coef * torch.mean(k_out**2)
                         loss += k_l2   
@@ -272,7 +261,6 @@ class PPOPriLipsNet:
                         mean_k_l2 += k_l2.item()
                     else:
                         self.actor_critic.act_student(obs_batch,pri_obs_batch,obs_history_batch )
-                        loss = 0.0
                     student_actions_log_prob_batch = self.actor_critic.get_actions_log_prob(target_action)
                     log_prob = student_actions_log_prob_batch.mean()
                     neglogp = -log_prob
@@ -283,16 +271,7 @@ class PPOPriLipsNet:
                     self.student_optimizer.step()
                     mean_student_neglogp += neglogp.item()
 
-                    # #! adaptation loss 
-                    # with torch.no_grad():
-                    #     adaptation_target = self.actor_critic.get_teacher_latent(obs_batch, pri_obs_batch)
-                    # adaptation_pred = self.actor_critic.get_student_latent(obs_history_batch)
-                    # adaptation_loss = F.mse_loss(adaptation_pred, adaptation_target)
-                    # self.adaptation_module_optimizer.zero_grad()
-                    # adaptation_loss.backward()
-                    # nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
-                    # self.adaptation_module_optimizer.step()
-                    # mean_adaptation_loss += adaptation_loss.item()
+                     
 
                     
 

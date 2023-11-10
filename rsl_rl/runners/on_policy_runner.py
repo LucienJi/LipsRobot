@@ -32,14 +32,14 @@ import time
 import os
 from collections import deque
 import statistics
-
+from legged_gym.utils.helpers import class_to_dict,NumpyEncoder
 from torch.utils.tensorboard import SummaryWriter
 import torch
 
 from rsl_rl.algorithms import PPOPriLipsNet
 from rsl_rl.modules import ActorCriticPriLipsNet
 from rsl_rl.env import VecEnv
-
+import json 
 
 class OnPolicyRunner:
 
@@ -48,7 +48,7 @@ class OnPolicyRunner:
                  train_cfg,  # train所需的所有参数都在这里
                  log_dir=None,
                  device='cpu'):
-
+        self.train_cfg = train_cfg
         self.cfg=train_cfg["runner"]
         self.alg_cfg = train_cfg["algorithm"]
         self.policy_cfg = train_cfg["policy"]
@@ -84,6 +84,7 @@ class OnPolicyRunner:
     
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         # initialize writer
+        self.save_cfg()
         if self.log_dir is not None and self.writer is None:
             self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
         if init_at_random_ep_len: #TODO:
@@ -133,8 +134,8 @@ class OnPolicyRunner:
             
             mean_value_loss, mean_surrogate_loss, mean_student_neglogp,mean_adaptation_loss,\
                  mean_k_out, mean_jac_norm, max_k_out, max_jac_norm, min_k_out, min_jac_norm,mean_k_l2= self.alg.update(
-                                                                                        update_teacher=True, 
-                                                                                        update_student=True)
+                                                                                        update_teacher=self.cfg['update_teacher'], 
+                                                                                        update_student=it > self.cfg['start_update_student'])
             stop = time.time()
             learn_time = stop - start
             if self.log_dir is not None:
@@ -262,7 +263,7 @@ class OnPolicyRunner:
         if load_optimizer:
             self.alg.teacher_optimizer.load_state_dict(loaded_dict['teacher_optimizer_state_dict'])
             self.alg.student_optimizer.load_state_dict(loaded_dict['student_optimizer_state_dict'])
-        self.current_learning_iteration = loaded_dict['iter']
+        # self.current_learning_iteration = loaded_dict['iter']
         return loaded_dict['infos']
 
     def load_expert(self,path):
@@ -272,6 +273,15 @@ class OnPolicyRunner:
         print("###### Teacher loaded ######")
         return loaded_dict['infos']
     
+    def save_cfg(self):
+        # 保存训练使用的cfg参数
+        
+        train_cfg_dict = class_to_dict(self.train_cfg) if type(self.train_cfg) is not dict else self.train_cfg
+        train_cfg_json = json.dumps(train_cfg_dict, sort_keys=False, indent=4, separators=(',',':'),cls=NumpyEncoder)
+        if not os.path.exists(self.log_dir):
+            os.makedirs(self.log_dir)
+        with open(os.path.join(self.log_dir, "train_cfg.json"), 'w') as f:
+            f.write(train_cfg_json)
     
 
     def get_inference_policy(self, device=None):

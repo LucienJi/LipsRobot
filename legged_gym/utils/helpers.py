@@ -35,9 +35,16 @@ import numpy as np
 import random
 from isaacgym import gymapi
 from isaacgym import gymutil
-
+import json 
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
-
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        try:
+            return json.JSONEncoder.default(self, obj)
+        except:
+            return str(obj)
 def class_to_dict(obj) -> dict:
     if not  hasattr(obj,"__dict__"):
         return obj
