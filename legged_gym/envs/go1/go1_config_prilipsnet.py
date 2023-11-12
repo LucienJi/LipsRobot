@@ -115,17 +115,17 @@ class Go1RoughCfgPriLipsNet( LeggedRobotCfg ):
         terminate_after_contacts_on = ["base"]
         self_collisions = 1 # 1 to disable, 0 to enable...bitwise filter
   
-    class rewards( LeggedRobotCfg.rewards ):
+    class rewards( ):
         soft_dof_pos_limit = 0.9
+        soft_dof_vel_limit = 0.9
+        soft_torque_limit = 0.9
+
         base_height_target = 0.25
-        
         #TODO: 这个会clip 负的reward
         only_positive_rewards = False # if true negative total rewards are clipped at zero (avoids early termination problems)
-        only_positive_rewards_ji22_style = True
+        only_positive_rewards_ji22_style = False
         sigma_rew_neg = 0.02
         tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
-        soft_dof_vel_limit = 1.
-        soft_torque_limit = 1.
         max_contact_force = 100. # forces above this value are penalized
         class scales( LeggedRobotCfg.rewards.scales ):
             # torques = -0.0002
@@ -198,12 +198,12 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         actor_f_hid_nonlinear = 'lrelu'
         actor_f_out_nonlinear = 'identity'
         # actor-k 函数设计
-        k_lips = False
+        k_lips = True
         actor_global_lips = False
         actor_multi_k = True 
         actor_k_init = 10
         actor_k_hid_dims = [512, 256, 128]
-        actor_k_hid_nonlinear = 'tanh'
+        actor_k_hid_nonlinear = 'lrelu'
         actor_k_out_nonlinear = 'softplus'
         actor_eps = 1e-4
         actor_squash_action = False
@@ -225,6 +225,7 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         learning_rate_actor_f = 1.e-5
         learning_rate_actor_k = 1.e-5
         lips_loss_coef = 1e-5 #1e-5 好像不能太大
+        jac_norm_loss_coef = 0.0 # 想要限制唯一解 
 
         learning_rate_student = 1.e-5
         
@@ -245,11 +246,11 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         num_steps_per_env = 24 # per iteration
         max_iterations = 5000 # number of policy updates
         update_teacher = True
-        start_update_student = 100
+        start_update_student = 2000
 
         # logging
-        save_interval = 500 # check for potential saves every this many iterations
-        experiment_name = 'Retrain_Lips_Debug_v4_multi_k' # name of the experiment
+        save_interval = 1000 # check for potential saves every this many iterations
+        experiment_name = 'Multi_K_Lips' # name of the experiment
         run_name = ''
         
         # load and resume

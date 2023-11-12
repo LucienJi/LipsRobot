@@ -194,10 +194,10 @@ class ActorCriticPriLipsNet(nn.Module):
         obs_history = obs_history.reshape(-1, self.num_obs_history)
         student_input = torch.cat((obs, obs_history), dim=-1)
         if self.use_lips:
-            action_mean,k_out, jac_norm = self.actor_student.forward(student_input,get_info = True)
+            action_mean,k_out, jac_norm, f_out = self.actor_student.forward(student_input,get_info = True)
             self.distribution = Normal(action_mean, action_mean*0. + self.student_std)
             if get_info:
-                return self.distribution.sample(), k_out, jac_norm
+                return self.distribution.sample(), k_out, jac_norm,f_out
             else:
                 return self.distribution.sample()
         else:
@@ -222,12 +222,14 @@ class ActorCriticPriLipsNet(nn.Module):
         
         if use_student:
             student_input = torch.cat((obs, obs_history), dim=-1)
-            actions_mean = self.actor_student.forward(student_input)
+            actions_mean, k_out, jac_norm, f_out = self.actor_student.forward(student_input,get_info=True)
+            return actions_mean, k_out, jac_norm, f_out
         else:
             latent = self.get_teacher_latent(obs,pri_obs)
             teacher_input = torch.cat((obs, latent), dim=-1)
             actions_mean = self.actor_teacher.forward(teacher_input)
-        return actions_mean
+            return actions_mean
+        
 
     def evaluate(self, critic_observations,privileged_obs):
         input = torch.cat((critic_observations, privileged_obs), dim=-1)

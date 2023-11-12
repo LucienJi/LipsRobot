@@ -49,7 +49,7 @@ def train(args):
         log_root = None
         print("[debug] 当前在debug模式下, 设置 log_root=None")
     ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, log_root=log_root)  # log_root=None
-    ppo_runner.load("logs/Lips_Debug_v4_multi_k/Nov10_00-20-21_/model_10000.pt", load_optimizer=False)
+    ppo_runner.load_expert("model_archive/ExpertModel2.pt")
     ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=False)
 
 if __name__ == '__main__':

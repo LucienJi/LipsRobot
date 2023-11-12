@@ -214,9 +214,11 @@ class LeggedRobot(BaseTask):
             self.episode_sums[name] += rew
 
         if self.cfg.rewards.only_positive_rewards:
-            self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
+            self.rew_buf[:] = torch.clip(self.rew_buf_pos[:] + self.rew_buf_neg[:], min=0.)
         elif self.cfg.rewards.only_positive_rewards_ji22_style: #TODO: update
             self.rew_buf[:] = self.rew_buf_pos[:] * torch.exp(self.rew_buf_neg[:] / self.cfg.rewards.sigma_rew_neg)
+        else:
+            self.rew_buf[:] = self.rew_buf_pos[:] + self.rew_buf_neg[:]
         self.episode_sums["total"] += self.rew_buf
         # add termination reward after clipping
         if "termination" in self.reward_scales:

@@ -105,9 +105,9 @@ class OnPolicyRunner:
         for it in range(self.current_learning_iteration, tot_iter):
             start = time.time()
             # Rollout
-            with torch.inference_mode():
+            with torch.no_grad():
                 for i in range(self.num_steps_per_env):
-                    actions = self.alg.act(obs_dict['obs'], obs_dict['privileged_obs'], obs_dict['obs_history'],use_privileged_obs=True)
+                    actions = self.alg.act(obs_dict['obs'], obs_dict['privileged_obs'], obs_dict['obs_history'],use_DAgger=it > self.cfg['start_update_student'])
                     obs_dict, rewards, dones, infos = self.env.step(actions)
                     for k,v in obs_dict.items():
                         obs_dict[k] = v.to(self.device)
@@ -133,7 +133,7 @@ class OnPolicyRunner:
                 self.alg.compute_returns(obs_dict['obs'], obs_dict['privileged_obs'])
             
             mean_value_loss, mean_surrogate_loss, mean_student_neglogp,mean_adaptation_loss,\
-                 mean_k_out, mean_jac_norm, max_k_out, max_jac_norm, min_k_out, min_jac_norm,mean_k_l2= self.alg.update(
+            mean_k_out, mean_jac_norm, mean_f_out, max_k_out, max_jac_norm, max_f_out, min_k_out, min_jac_norm ,min_f_out,mean_k_l2= self.alg.update(
                                                                                         update_teacher=self.cfg['update_teacher'], 
                                                                                         update_student=it > self.cfg['start_update_student'])
             stop = time.time()
@@ -177,6 +177,11 @@ class OnPolicyRunner:
         self.writer.add_scalar('Loss/mean_k_out', locs['mean_k_out'], locs['it'])
         self.writer.add_scalar('Loss/max_k_out', locs['max_k_out'], locs['it'])
         self.writer.add_scalar('Loss/min_k_out', locs['min_k_out'], locs['it'])
+
+        self.writer.add_scalar('Loss/mean_f_out', locs['mean_f_out'], locs['it'])
+        self.writer.add_scalar('Loss/min_f_out', locs['min_f_out'], locs['it'])
+        self.writer.add_scalar('Loss/max_f_out', locs['max_f_out'], locs['it'])
+
         self.writer.add_scalar('Loss/mean_jac_norm', locs['mean_jac_norm'], locs['it'])
         self.writer.add_scalar('Loss/max_jac_norm', locs['max_jac_norm'], locs['it'])
         self.writer.add_scalar('Loss/min_jac_norm', locs['min_jac_norm'], locs['it'])
@@ -210,10 +215,13 @@ class OnPolicyRunner:
                           f"""{'mean_k_l2:':>{pad}} {locs['mean_k_l2']:.4f}\n"""
                           f"""{'mean_k_out:':>{pad}} {locs['mean_k_out']:.4f}\n"""
                           f"""{'max_k_out:':>{pad}} {locs['max_k_out']:.4f}\n"""
-                          f"""{'min_k_outs:':>{pad}} {locs['min_k_out']:.4f}\n"""
+                          f"""{'min_k_out:':>{pad}} {locs['min_k_out']:.4f}\n"""
                           f"""{'mean_jac_norm:':>{pad}} {locs['mean_jac_norm']:.4f}\n"""
                           f"""{'min_jac_norm:':>{pad}} {locs['min_jac_norm']:.4f}\n"""
                           f"""{'max_jac_norm:':>{pad}} {locs['max_jac_norm']:.4f}\n"""
+                          f"""{'mean_f_out:':>{pad}} {locs['mean_f_out']:.4f}\n"""
+                          f"""{'max_f_out:':>{pad}} {locs['max_f_out']:.4f}\n"""
+                          f"""{'min_f_out:':>{pad}} {locs['min_f_out']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
                           f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
                           f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n""")
@@ -235,6 +243,9 @@ class OnPolicyRunner:
                           f"""{'mean_jac_norm:':>{pad}} {locs['mean_jac_norm']:.4f}\n"""
                           f"""{'min_jac_norm:':>{pad}} {locs['min_jac_norm']:.4f}\n"""
                           f"""{'max_jac_norm:':>{pad}} {locs['max_jac_norm']:.4f}\n"""
+                          f"""{'mean_f_out:':>{pad}} {locs['mean_f_out']:.4f}\n"""
+                          f"""{'max_f_out:':>{pad}} {locs['max_f_out']:.4f}\n"""
+                          f"""{'min_f_out:':>{pad}} {locs['min_f_out']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
                         #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
                         #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
@@ -275,13 +286,20 @@ class OnPolicyRunner:
     
     def save_cfg(self):
         # 保存训练使用的cfg参数
-        
         train_cfg_dict = class_to_dict(self.train_cfg) if type(self.train_cfg) is not dict else self.train_cfg
         train_cfg_json = json.dumps(train_cfg_dict, sort_keys=False, indent=4, separators=(',',':'),cls=NumpyEncoder)
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
         with open(os.path.join(self.log_dir, "train_cfg.json"), 'w') as f:
             f.write(train_cfg_json)
+        
+        # 保存环境使用的 cfg 参数
+        env_cfg_dict = class_to_dict(self.env.cfg) if type(self.env.cfg) is not dict else self.env.cfg
+        env_cfg_json = json.dumps(env_cfg_dict, sort_keys=False, indent=4, separators=(',',':'),cls=NumpyEncoder)
+        if not os.path.exists(self.log_dir):
+            os.makedirs(self.log_dir)
+        with open(os.path.join(self.log_dir, "env_cfg.json"), 'w') as f:
+            f.write(env_cfg_json)
     
 
     def get_inference_policy(self, device=None):

@@ -55,6 +55,7 @@ class PPOPriLipsNet:
                  use_lips = True,
                  # lipsnet 的相关参数
                  lips_loss_coef = 0.001, # 重要参数, 控制 k_out norm loss的weight
+                 jac_norm_loss_coef = 0.001,
                  learning_rate_teacher = 1.e-3,
                  learning_rate_student = 1.e-5,
                  learning_rate_actor_f = 1.e-3,
@@ -127,6 +128,7 @@ class PPOPriLipsNet:
         self.use_clipped_value_loss = use_clipped_value_loss
         # 设置lipsnet的loss
         self.lips_loss_coef = lips_loss_coef
+        self.jac_norm_loss_coef = jac_norm_loss_coef
         
         
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, obs_history_shape, action_shape):
@@ -138,10 +140,13 @@ class PPOPriLipsNet:
     def train_mode(self):
         self.actor_critic.train()
 
-    def act(self, obs, privileged_obs, obs_history, use_privileged_obs = True):
+    def act(self, obs, privileged_obs, obs_history, use_DAgger = True):
         # Compute the actions and values
         # use expert policy with probability of self.DAgger_coef
-        use_expert = torch.rand(1).item() < self.DAgger_coef
+        if use_DAgger:
+            use_expert = torch.rand(1).item() < self.DAgger_coef
+        else:
+            use_expert = True
         if not use_expert:
             self.transition.actions = self.actor_critic.act_student(obs,privileged_obs,obs_history,get_info=False)
         else:
@@ -181,9 +186,9 @@ class PPOPriLipsNet:
         mean_surrogate_loss = 0
         mean_student_neglogp = 0
         mean_adaptation_loss = 0 
-        mean_k_out, mean_jac_norm = 0, 0
-        max_k_out, max_jac_norm = 0, 0
-        min_k_out, min_jac_norm = 0, 0
+        mean_k_out, mean_jac_norm,mean_f_out = 0, 0 , 0
+        max_k_out, max_jac_norm , max_f_out = 0, 0, 0
+        min_k_out, min_jac_norm, min_f_out = 0, 0, 0
         mean_k_l2 = 0.0
 
         generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
@@ -249,8 +254,9 @@ class PPOPriLipsNet:
                         target_action = self.actor_critic.action_mean.detach() 
                     if self.use_lips:
                         
-                        _, k_out, jac_norm = self.actor_critic.act_student(obs_batch,pri_obs_batch,obs_history_batch, get_info=True)
+                        _, k_out, jac_norm, f_out = self.actor_critic.act_student(obs_batch,pri_obs_batch,obs_history_batch, get_info=True)
                         k_l2 = self.lips_loss_coef * torch.mean(k_out**2)
+                        jac_norm_loss = self.jac_norm_loss_coef * torch.mean(jac_norm)
                         loss += k_l2   
                         mean_k_out += torch.mean(k_out).item()
                         max_k_out += torch.max(k_out).item()
@@ -258,6 +264,9 @@ class PPOPriLipsNet:
                         mean_jac_norm += torch.mean(jac_norm).item()
                         max_jac_norm += torch.max(jac_norm).item()
                         min_jac_norm += torch.min(jac_norm).item()
+                        mean_f_out += torch.mean(f_out).item()
+                        max_f_out += torch.max(f_out).item()
+                        min_f_out += torch.min(f_out).item()
                         mean_k_l2 += k_l2.item()
                     else:
                         self.actor_critic.act_student(obs_batch,pri_obs_batch,obs_history_batch )
@@ -294,4 +303,4 @@ class PPOPriLipsNet:
         self.storage.clear()
 
         return mean_value_loss, mean_surrogate_loss, mean_student_neglogp,mean_adaptation_loss,\
-            mean_k_out, mean_jac_norm, max_k_out, max_jac_norm, min_k_out, min_jac_norm,mean_k_l2
+            mean_k_out, mean_jac_norm, mean_f_out, max_k_out, max_jac_norm, max_f_out, min_k_out, min_jac_norm ,min_f_out,mean_k_l2

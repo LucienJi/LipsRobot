@@ -37,6 +37,7 @@ class Logger:
     def __init__(self, dt):
         self.state_log = defaultdict(list)
         self.rew_log = defaultdict(list)
+        self.lips_state_log = defaultdict(list)
         self.dt = dt
         self.num_episodes = 0
         self.plot_process = None
@@ -47,6 +48,9 @@ class Logger:
     def log_states(self, dict):
         for key, value in dict.items():
             self.log_state(key, value)
+    def log_lips(self,dict):
+        for key, value in dict.items():
+            self.lips_state_log[key].append(value)
 
     def log_rewards(self, dict, num_episodes):
         for key, value in dict.items():
@@ -61,6 +65,36 @@ class Logger:
     def plot_states(self):
         self.plot_process = Process(target=self._plot)
         self.plot_process.start()
+    
+    def plot_lips(self):
+        self.plot_process = Process(target=self._plot_lips)
+        self.plot_process.start()
+    
+    def _plot_lips(self):
+        nb_rows = 2
+        nb_cols = 2
+        fig, axs = plt.subplots(nb_rows, nb_cols)
+        for key, value in self.lips_state_log.items():
+            time = np.linspace(0, len(value)*self.dt, len(value))
+            break
+        log= self.lips_state_log
+        a = axs[0, 0]
+        if log['k_out']:a.plot(time, log['k_out'], label='k_out')
+        a.set(xlabel='time [s]', ylabel='k_out', title='k_out')
+        a.legend()
+        a = axs[0, 1]
+        if log['f_out']:a.plot(time, log['f_out'], label='f_out')
+        a.set(xlabel='time [s]', ylabel='f_out', title='f_out')
+        a.legend()
+        a = axs[1, 0]
+        if log['jac_norm']:a.plot(time, log['jac_norm'], label='jac_norm')
+        a.set(xlabel='time [s]', ylabel='jac_norm', title='jac_norm')
+        a.legend()
+        a = axs[1, 1]
+        if log['action']:a.plot(time, log['action'], label='action')
+        a.set(xlabel='time [s]', ylabel='action', title='action')
+        a.legend()
+        plt.show()
 
     def _plot(self):
         nb_rows = 3

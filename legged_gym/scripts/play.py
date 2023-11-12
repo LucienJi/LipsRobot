@@ -61,7 +61,7 @@ def play(args):
     # load policy
     train_cfg.runner.resume = False
     ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
-    ppo_runner.load("logs/Lips_Debug_v4_multi_k/Nov10_00-20-21_/model_10000.pt")
+    ppo_runner.load("logs/Multi_K_Lips/Nov11_11-24-36_/model_10000.pt")
     
 
     policy = ppo_runner.get_inference_policy(device=env.device)
@@ -82,21 +82,27 @@ def play(args):
     camera_direction = np.array(env_cfg.viewer.lookat) - np.array(env_cfg.viewer.pos)
     img_idx = 0
 
-    obs_list = []; action_list = []; k_out_norm_list = []; k_out_abs_list = []; jac_norm_list = []
-
-    with torch.inference_mode():
+    obs_list = []; action_list = []; k_out_list = []; f_out_list = []; jac_norm_list = []
+    use_student = False
+    # with torch.inference_mode():
+    with torch.no_grad():
         for i in range(10*int(env.max_episode_length)):
-            # actions = policy(obs.detach())
-            # actions, k_out, jac_norm = policy(obs.detach()) 
-            # obs = obs_dict['obs']
-            # print("Cmd: ", env.commands)
-            with torch.no_grad():
-                actions = policy(obs_dict,use_student=True)
+            
+            
+            if use_student:
+                actions,k_out, jac_norm, f_out = policy(obs_dict,use_student=use_student)
+            else:
+                actions = policy(obs_dict,use_student=use_student)
+            
+            
             obs_list.append(obs_dict['obs'].cpu().detach().numpy()); 
             action_list.append(actions.cpu().detach().numpy())
-            # k_out_norm_list.append((k_out.cpu().detach().numpy() ** 2).mean()); 
-            # k_out_abs_list.append((k_out.cpu().detach().numpy()).mean()); 
-            # jac_norm_list.append(jac_norm.cpu().detach().numpy())
+
+            if use_student:
+                k_out_list.append(k_out.cpu().detach().numpy()[robot_index, joint_index]); 
+                f_out_list.append(f_out.cpu().detach().numpy()[robot_index, joint_index]); 
+                jac_norm_list.append(jac_norm.cpu().detach().numpy()[robot_index])
+
             if i == env.max_episode_length:
                 break
             else:
@@ -129,8 +135,19 @@ def play(args):
                         'contact_forces_z': env.contact_forces[robot_index, env.feet_indices, 2].cpu().numpy()
                     }
                 )
+                if use_student:
+                    logger.log_lips(
+                        {
+                            'k_out': k_out[robot_index, joint_index].item(),
+                            'f_out': f_out[robot_index, joint_index].item(),
+                            'jac_norm': jac_norm[robot_index].item(),
+                            'action': actions[robot_index, joint_index].item()
+                        }
+                    )
             elif i==stop_state_log:
                 logger.plot_states()
+                if use_student:
+                    logger.plot_lips()
             if  0 < i < stop_rew_log:
                 if infos["episode"]:
                     num_episodes = torch.sum(env.reset_buf).item()
@@ -141,25 +158,23 @@ def play(args):
         
     action_arr = np.concatenate(action_list)
     obs_arr = np.concatenate(obs_list)
-    # k_out_norm_arr = np.array(k_out_norm_list)
-    # k_out_abs_arr = np.array(k_out_abs_list)
-    # jac_norm_arr = np.array(jac_norm_list).flatten()
+    if use_student:
+        k_out_arr = np.concatenate(k_out_list)
+        f_out_arr = np.concatenate(f_out_list)
+        jac_norm_arr = np.concatenate(jac_norm_list)
     # 绘制图像
     import matplotlib.pyplot as plt
     idx = np.arange(action_arr.shape[0])
     plt.plot(idx, action_arr)
     plt.title("action")
     plt.show()
+    if use_student:
+        plt.plot(idx, k_out_arr, label="k_out")
+        plt.plot(idx, f_out_arr, label="f_out")
+        plt.title("k_out")
+        plt.legend()
+        plt.show()
     
-    # plt.plot(idx, k_out_norm_arr, label="k_out_norm_arr")
-    # plt.plot(idx, k_out_abs_arr, label="k_out_abs_arr")
-    # plt.title("k_out_norm")
-    # plt.legend()
-    # plt.show()
-    
-    # plt.plot(idx, jac_norm_arr)
-    # plt.title("jac_norm")
-    # plt.show()
     import pdb; pdb.set_trace()
     
     

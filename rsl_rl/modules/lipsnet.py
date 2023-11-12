@@ -33,7 +33,10 @@ class K_net(nn.Module):
             self.k = torch.nn.Parameter(torch.tensor(k_init, dtype=torch.float), requires_grad=True)
         else:
             # declare network
-            self.k = mlp(sizes, hid_nonlinear, out_nonlinear)
+            if self.k_lips:
+                self.k = mlp(sizes, hid_nonlinear, nn.Identity())
+            else:
+                self.k = mlp(sizes, hid_nonlinear, out_nonlinear)
             # set K_init
             self.k[-2].bias.data += torch.tensor(k_init, dtype=torch.float).data
 
@@ -51,7 +54,9 @@ class K_net(nn.Module):
                     with torch.no_grad():
                         jacobi = vmap(jacrev(self.k))(x)
                 jac_norm = torch.norm(jacobi, 2, dim=(1,2)).unsqueeze(1)
-                return k_out / (jac_norm + self.eps)
+                res =  k_out / (jac_norm + self.eps)
+                res = F.softplus(res)
+                return res 
         
 
 class LipsNet(nn.Module):
@@ -97,13 +102,14 @@ class LipsNet(nn.Module):
         #             (batch     , f output dim  , x feature dim)
         # calcute jac norm
         jac_norm = torch.norm(jacobi, 2, dim=(1,2)).unsqueeze(1)
+        
         # multi-dimensional gradient normalization (MGN)
         action = k_out * f_out / (jac_norm + self.eps)
         # squash action
         if self.squash_action:
             action = torch.tanh(action)
         if get_info:
-            return action, k_out, jac_norm
+            return action, k_out, jac_norm, f_out
         else:
             return action
     
