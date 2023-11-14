@@ -145,16 +145,37 @@ class Go1RoughCfg( LeggedRobotCfg ):
         max_push_vel_xy = 1.
 
 class Go1RoughCfgPPO( LeggedRobotCfgPPO ):
+
+    class policy: 
+        init_noise_std = 1.0
+        actor_hidden_dims = [512, 256, 128] #TODO: 注意修改网络结构
+        critic_hidden_dims = [512, 256, 128]
+        adaptation_module_branch_hidden_dims = [256, 128]
+        activation = 'lrelu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
+        latent_dim = 16
     class algorithm( LeggedRobotCfgPPO.algorithm ):
+        value_loss_coef = 1.0
+        use_clipped_value_loss = True
+        clip_param = 0.2
         entropy_coef = 0.01
+        
+        num_learning_epochs = 5
+        num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
+        learning_rate = 1.e-4
+        adaptation_module_learning_rate = 1.e-3
+        schedule = 'adaptive' # could be adaptive, fixed 
+        gamma = 0.99
+        lam = 0.95
+        desired_kl = 0.01
+        max_grad_norm = 1.
     class runner( LeggedRobotCfgPPO.runner ):
         
         num_steps_per_env = 24 # per iteration
-        max_iterations = 5000 # number of policy updates
+        max_iterations = 10000 # number of policy updates
         # logging
-        save_interval = 100 # check for potential saves every this many iterations
+        save_interval = 1000 # check for potential saves every this many iterations
         
-        run_name = ''
-        experiment_name = 'rough_go1'
+        run_name = 'MLP'
+        experiment_name = 'Expert'
 
   

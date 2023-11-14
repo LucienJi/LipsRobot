@@ -32,141 +32,161 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 import os
 
 import isaacgym
+
 from legged_gym.envs import *
-from legged_gym.utils import  get_args, export_policy_as_jit, task_registry, Logger
-from legged_gym.envs.go1.go1_eval_config import Go1RoughCfgEval,Go1RoughCfgPPOEval
+from legged_gym.utils import  get_args, export_policy_as_jit, task_registry, Logger, class_to_dict
+from legged_gym.envs.go1.go1_eval_config import Go1Eval, Go1RoughCfgPPOPriLipsNet
+from legged_gym.envs.go1.go1_config import Go1RoughCfgPPO
+from rsl_rl.runners.on_policy_runner import OnPolicyRunner
+from rsl_rl.runners.on_policy_runner_old import OnPolicyRunner as OnPolicyRunnerOld
 import numpy as np
+from legged_gym.utils.helpers import update_cfg_from_args
 import torch
 
+# noise level
+def dump_results(dst:dict, src:dict):
+    for k,v in src.items():
+        if k in dst.keys():
+            dst[k].append(v)
+        else:
+            dst[k] = [v]
+    return dst 
 
-def play(args):
+
+
+def eval_noise_level(args,
+                     use_expert,
+                     use_student,
+                     model_path,
+                    noise_level, 
+                    target_vel = [0.5,0.0,0.0],
+                    eval_path = "logs/Eval"):
+    env_cfg = Go1Eval()
+    if use_expert:
+        train_cfg = Go1RoughCfgPPO()
+    else:
+        train_cfg = Go1RoughCfgPPOPriLipsNet()
     # env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
-    env_cfg , train_cfg = Go1RoughCfgEval, Go1RoughCfgPPOEval
     # override some parameters for testing
-    env_cfg.env.num_envs = min(env_cfg.env.num_envs, 100)
+    env_cfg.env.num_envs = 1000
     env_cfg.terrain.num_rows = 5
     env_cfg.terrain.num_cols = 5
     env_cfg.terrain.curriculum = False
-    env_cfg.noise.add_noise = False
     env_cfg.domain_rand.randomize_friction = False
     env_cfg.domain_rand.push_robots = False
 
+    env_cfg.noise.add_noise = True
+    env_cfg.noise.noise_level = noise_level
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
     env = HistoryWrapper(env)
     env.set_eval(True)
     env.reset()
-    env.set_commands([0.5,0.0,0.0])
+    env.set_commands(target_vel)
     obs_dict = env.get_observations()
     
+    eval_name = train_cfg.runner.experiment_name + "-" + train_cfg.runner.run_name + "-noise_level-" + str(noise_level) 
+    eval_res = {}
+    eval_res['eval_name'] = eval_name
     # load policy
-    train_cfg.runner.resume = True
-    ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
-    ppo_runner.load("logs/Hist_Rollout/Oct27_22-21-54_/model_10000.pt")
-    
-
+    train_cfg.runner.resume = False
+    _,train_cfg = update_cfg_from_args(None, train_cfg, args)
+    train_cfg_dict = class_to_dict(train_cfg)
+    if use_expert:
+        ppo_runner = OnPolicyRunnerOld(env=env, train_cfg=train_cfg_dict,log_dir=None,device = args.rl_device)
+    else:
+        ppo_runner = OnPolicyRunner(env=env, train_cfg=train_cfg_dict,log_dir=None,device = args.rl_device)
+    # ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
+    ppo_runner.load(model_path)
     policy = ppo_runner.get_inference_policy(device=env.device)
-    
-    # export policy as a jit module (used to run it from C++)
-    if EXPORT_POLICY:
-        path = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name, 'exported', 'policies')
-        export_policy_as_jit(ppo_runner.alg.actor_critic, path)
-        print('Exported policy as jit script to: ', path)
-
-    logger = Logger(env.dt)
-    robot_index = 0 # which robot is used for logging
-    joint_index = 1 # which joint is used for logging
-    stop_state_log = 100 # number of steps before plotting states
-    stop_rew_log = env.max_episode_length + 1 # number of steps before print average episode rewards
-    camera_position = np.array(env_cfg.viewer.pos, dtype=np.float64)
-    camera_vel = np.array([1., 1., 0.])
-    camera_direction = np.array(env_cfg.viewer.lookat) - np.array(env_cfg.viewer.pos)
-    img_idx = 0
-
-    obs_list = []; action_list = []; k_out_norm_list = []; k_out_abs_list = []; jac_norm_list = []
-
-    with torch.inference_mode():
-        for i in range(10*int(env.max_episode_length)):
-            # actions = policy(obs.detach())
-            # actions, k_out, jac_norm = policy(obs.detach()) 
-            # obs = obs_dict['obs']
-            # print("Cmd: ", env.commands)
-            with torch.no_grad():
-                actions = policy(obs_dict,use_student=False,use_pri=False)
-            obs_list.append(obs_dict['obs'].cpu().detach().numpy()); 
-            action_list.append(actions.cpu().detach().numpy())
-            # k_out_norm_list.append((k_out.cpu().detach().numpy() ** 2).mean()); 
-            # k_out_abs_list.append((k_out.cpu().detach().numpy()).mean()); 
-            # jac_norm_list.append(jac_norm.cpu().detach().numpy())
-            if i == env.max_episode_length:
-                break
+    # with torch.inference_mode():
+    with torch.no_grad():
+        for i in range(int(env.max_episode_length) + 10):
+            if use_expert:
+                actions = policy(obs_dict)
             else:
-                print(f"{i}/{env.max_episode_length}")
+                actions = policy(obs_dict,use_student=True)
             obs_dict, rewards, dones, infos = env.step(actions.detach())
+            eval_per_step = env.get_eval_result()
+            eval_res = dump_results(eval_res, eval_per_step)
+    
+    for k,v in eval_res.items():
+        if type(v) == list:
+            eval_res[k] = np.stack(v, axis=1) # (n_env, n_step)
+    first_done = np.argmax(eval_res['done'], axis = 1)
+    eval_res['first_done'] = first_done
+    eval_res['Fall'] = first_done < 1000
 
-            if RECORD_FRAMES:
-                if i % 2:
-                    filename = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name, 'exported', 'frames', f"{img_idx}.png")
-                    env.gym.write_viewer_image_to_file(env.viewer, filename)
-                    img_idx += 1 
-            if MOVE_CAMERA:
-                camera_position += camera_vel * env.dt
-                env.set_camera(camera_position, camera_position + camera_direction)
+    if os.path.exists(eval_path) == False:
+        os.makedirs(eval_path)
+    eval_file_name = os.path.join(eval_path,eval_name)
+    np.save(eval_file_name, eval_res)
 
-            if i < stop_state_log:
-                logger.log_states(
-                    {
-                        'dof_pos_target': actions[robot_index, joint_index].item() * env.cfg.control.action_scale,
-                        'dof_pos': env.dof_pos[robot_index, joint_index].item(),
-                        'dof_vel': env.dof_vel[robot_index, joint_index].item(),
-                        'dof_torque': env.torques[robot_index, joint_index].item(),
-                        'command_x': env.commands[robot_index, 0].item(),
-                        'command_y': env.commands[robot_index, 1].item(),
-                        'command_yaw': env.commands[robot_index, 2].item(),
-                        'base_vel_x': env.base_lin_vel[robot_index, 0].item(),
-                        'base_vel_y': env.base_lin_vel[robot_index, 1].item(),
-                        'base_vel_z': env.base_lin_vel[robot_index, 2].item(),
-                        'base_vel_yaw': env.base_ang_vel[robot_index, 2].item(),
-                        'contact_forces_z': env.contact_forces[robot_index, env.feet_indices, 2].cpu().numpy()
-                    }
-                )
-            elif i==stop_state_log:
-                logger.plot_states()
-            if  0 < i < stop_rew_log:
-                if infos["episode"]:
-                    num_episodes = torch.sum(env.reset_buf).item()
-                    if num_episodes>0:
-                        logger.log_rewards(infos["episode"], num_episodes)
-            elif i==stop_rew_log:
-                logger.print_rewards()
-        
-    action_arr = np.concatenate(action_list)
-    obs_arr = np.concatenate(obs_list)
-    k_out_norm_arr = np.array(k_out_norm_list)
-    k_out_abs_arr = np.array(k_out_abs_list)
-    jac_norm_arr = np.array(jac_norm_list).flatten()
-    # 绘制图像
-    import matplotlib.pyplot as plt
-    idx = np.arange(action_arr.shape[0])
-    plt.plot(idx, action_arr)
-    plt.title("action")
-    plt.show()
+    print("Eval Done")
+
+def eval_push_level(args, push_level,push_index=0, push_interval=100, 
+                    target_vel = [0.5,0.0,0.0],eval_path = "logs/Eval"):
+    env_cfg = Go1Eval()
+    train_cfg = Go1RoughCfgPPOPriLipsNet()
+    # env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
+    # override some parameters for testing
+    env_cfg.env.num_envs = 1000 
+    env_cfg.terrain.num_rows = 5
+    env_cfg.terrain.num_cols = 5
+    env_cfg.terrain.curriculum = False
+    env_cfg.domain_rand.randomize_friction = False
+    env_cfg.domain_rand.push_robots = True
+    env_cfg.domain_rand.push_level = push_level
+    env_cfg.noise.add_noise = False
+    # prepare environment
+    env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
+    env = HistoryWrapper(env)
+    env.set_eval(True)
+    env.reset()
+    env.set_commands(target_vel)
+    obs_dict = env.get_observations()
     
-    plt.plot(idx, k_out_norm_arr, label="k_out_norm_arr")
-    plt.plot(idx, k_out_abs_arr, label="k_out_abs_arr")
-    plt.title("k_out_norm")
-    plt.legend()
-    plt.show()
+    eval_name = train_cfg.runner.experiment_name + "-" + train_cfg.runner.run_name + f"-push_level:{push_level}-" + f"-index:{push_index}-" + f"-interval:{push_interval}"
+    eval_res = {}
+    eval_res['eval_name'] = eval_name
+    # load policy
+    train_cfg.runner.resume = False
+    ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
+    ppo_runner.load("logs/Multi_K/Nov11_11-19-04_/model_10000.pt")
+    policy = ppo_runner.get_inference_policy(device=env.device)
+    use_student = False
+    # with torch.inference_mode():
+    with torch.no_grad():
+        for i in range(int(env.max_episode_length)):
+            
+            if use_student:
+                actions = policy(obs_dict,use_student=use_student)
+            else:
+                actions = policy(obs_dict,use_student=use_student)
+            if (i-99) % int(push_interval) == 0:
+                obs_dict, rewards, dones, infos = env.step_push(actions.detach(), push_level, push_index)
+            else:
+                obs_dict, rewards, dones, infos = env.step(actions.detach())
+            eval_per_step = env.get_eval_result()
+            eval_res = dump_results(eval_res, eval_per_step)
     
-    plt.plot(idx, jac_norm_arr)
-    plt.title("jac_norm")
-    plt.show()
-    import pdb; pdb.set_trace()
-    
-    
+    if os.path.exists(eval_path) == False:
+        os.makedirs(eval_path)
+    eval_file_name = os.path.join(eval_path,eval_name)
+    np.savez_compressed
+
 if __name__ == '__main__':
-    EXPORT_POLICY = False
-    RECORD_FRAMES = False
-    MOVE_CAMERA = False
     args = get_args()
-    play(args)
+    #! Eval Expert 
+    # eval_noise_level(args,
+    #                  use_expert=True,
+    #                  use_student=False,
+    #                  model_path="logs/Expert/Nov14_10-10-14_MLP/model_10000.pt",
+    #                   noise_level=1, target_vel=[1.0,0.0,0.0],eval_path = "logs/Eval")
+    #! Eval MLP Student 
+    eval_noise_level(args,
+                     use_expert=False,
+                     use_student=True,
+                     model_path="logs/LipsNet/Nov13_22-04-58_1e-3_L2/model_10000.pt",
+                      noise_level=1, target_vel=[1.0,0.0,0.0],eval_path = "logs/Eval")
+    # eval_push_level(args, push_level=5, target_vel=[0.5,0.0,0.0],eval_path = "logs/Eval")

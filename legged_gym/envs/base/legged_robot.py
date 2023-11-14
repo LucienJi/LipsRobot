@@ -269,6 +269,7 @@ class LeggedRobot(BaseTask):
             # print("Check: ", self.privileged_obs_buf.shape)
         # add noise if needed
         if self.add_noise:
+            # print("Noise Vec: ",(2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec[0:48]  )
             self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec[0:48] 
 
     def create_sim(self):
@@ -749,6 +750,8 @@ class LeggedRobot(BaseTask):
         body_names = self.gym.get_asset_rigid_body_names(robot_asset)
         self.dof_names = self.gym.get_asset_dof_names(robot_asset)
         self.num_bodies = len(body_names)
+        print("Num bodies: ", self.num_bodies)
+        print("Bodies: ", body_names)
         self.num_dofs = len(self.dof_names)
         feet_names = [s for s in body_names if self.cfg.asset.foot_name in s]
         penalized_contact_names = []
@@ -1040,26 +1043,91 @@ class LeggedRobot(BaseTask):
         noise_vec[36:48] = 0. # previous actions
         self.noise_scale_vec[0:48] = noise_vec[0:48]
 
-    def push_robots(self, max_vel ):
-        if max_vel is None:
-            max_vel = self.cfg.domain_rand.max_push_vel_xy
-            self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device)
-        elif type(max_vel) == float or type(max_vel) == int:
-            self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device)
-        else:
-            assert len(max_vel) == 2
-            self.root_states[:, 7:9] = torch_rand_float(-max_vel[0], max_vel[1], (self.num_envs, 2), device=self.device)
-        self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
-        
+    # def push_robots(self, max_vel ):
+    #     if max_vel is None:
+    #         max_vel = self.cfg.domain_rand.max_push_vel_xy
+    #         self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device)
+    #     elif type(max_vel) == float or type(max_vel) == int:
+    #         self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device)
+    #     else:
+    #         assert len(max_vel) == 2
+    #         self.root_states[:, 7:9] = torch_rand_float(-max_vel[0], max_vel[1], (self.num_envs, 2), device=self.device)
+    #     self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
     
+    def push_robots(self,level) : 
+        forces = torch.zeros((self.num_envs, self.num_bodies, 3), device=self.device, dtype=torch.float)
+        force_norm = 100 + 100 * level
+        theta = torch.rand((self.num_envs, 1), device=self.device) * 2 * np.pi
+        forces[:, 1, 0] = force_norm * torch.cos(theta).squeeze(1)
+        forces[:, 1, 1] = force_norm * torch.sin(theta).squeeze(1)
+        self.gym.apply_rigid_body_force_tensors(self.sim, gymtorch.unwrap_tensor(forces), 
+                                                None,
+                                                gymapi.ENV_SPACE)
+        self.gym.simulate(self.sim)
+        self.gym.refresh_dof_state_tensor(self.sim)
+
+        print("Pushed")
+    
+    def step_push(self, actions,push_level, push_index = 0):
+        """ Apply actions, simulate, call self.post_physics_step()
+
+        Args:
+            actions (torch.Tensor): Tensor of shape (num_envs, num_actions_per_env)
+        """
+        clip_actions = self.cfg.normalization.clip_actions
+        self.actions = torch.clip(actions, -clip_actions, clip_actions).to(self.device)
+        # step physics and render each frame
+        self.render()
+        
+        for _ in range(self.cfg.control.decimation):
+            self.torques = self._compute_torques(self.actions).view(self.torques.shape)
+            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques))
+            #! Add Force 
+            forces = torch.zeros((self.num_envs, self.num_bodies, 3), device=self.device, dtype=torch.float)
+            force_norm = 100 + 200 * push_level
+            theta = torch.rand((self.num_envs, 1), device=self.device) * 2 * np.pi
+            forces[:, push_index, 0] = force_norm * torch.cos(theta).squeeze(1)
+            forces[:, push_index, 1] = force_norm * torch.sin(theta).squeeze(1)
+            self.gym.apply_rigid_body_force_tensors(self.sim, gymtorch.unwrap_tensor(forces), 
+                                                    None,
+                                                    gymapi.ENV_SPACE)
+            self.gym.simulate(self.sim)
+            if self.device == 'cpu':
+                self.gym.fetch_results(self.sim, True)
+            self.gym.refresh_dof_state_tensor(self.sim)
+        print("Pushed")
+
+        self.post_physics_step()
+
+        # return clipped obs, clipped states (None), rewards, dones and infos
+        clip_obs = self.cfg.normalization.clip_observations
+        self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
+        if self.privileged_obs_buf is not None:
+            self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
+        return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
+
     def get_eval_result(self,):
-        action_fluctation = torch.norm(self.actions - self.llast_actions, dim=-1,p=2).cpu().numpy() #! 其实是 fluction,因为 last action 更新了
+        #! 记录 action rate, tracking error, cot 
+        action_fluctation = torch.norm(self.last_actions - self.llast_actions, dim=-1,p=2).cpu().numpy() #! 其实是 fluction,因为 last action 更新了
+        tracking_error = torch.norm(self.commands[:, :2] - self.base_lin_vel[:, :2], dim=-1,p=2).cpu().numpy()
+        power = (self.torques * self.dof_vel).clamp(min=0.).sum(dim=-1).cpu().numpy()
+        cost_of_transport = power / torch.norm(self.base_lin_vel[:, :2], dim=-1,p=2).cpu().numpy()
+        # result = {
+        #     'action_fluctation': action_fluctation,
+        #     'cmd_x' : self.commands[:,0].cpu().numpy(),
+        #     'cmd_y' : self.commands[:,1].cpu().numpy(),
+        #     'cmd_yaw' : self.commands[:,2].cpu().numpy(),
+        #     'base_lin_vel_x' : self.base_lin_vel[:,0].cpu().numpy(),
+        #     'base_lin_vel_y' : self.base_lin_vel[:,1].cpu().numpy(),
+        #     'base_lin_vel_z' : self.base_lin_vel[:,2].cpu().numpy(),
+        #     'torque': self.torques.cpu().numpy(),
+        #     'dof_vel':self.dof_vel.cpu().numpy(),
+        #     'done':self.reset_buf.cpu().numpy(),
+        # }
         result = {
             'action_fluctation': action_fluctation,
-            'cmd_x' : self.commands[:,0].cpu().numpy(),
-            'cmd_y' : self.commands[:,1].cpu().numpy(),
-            'cmd_yaw' : self.commands[:,2].cpu().numpy(),
-            'base_lin_vel_x' : self.base_lin_vel[:,0].cpu().numpy(),
-            'base_lin_vel_y' : self.base_lin_vel[:,1].cpu().numpy(),
-            'base_lin_vel_z' : self.base_lin_vel[:,2].cpu().numpy(),
+            'tracking_error': tracking_error,
+            'cost_of_transport': cost_of_transport,
+            'done':self.reset_buf.cpu().numpy(),
         }
+        return result 

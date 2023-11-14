@@ -37,7 +37,8 @@ class RolloutStorage:
     class Transition:
         def __init__(self):
             self.observations = None
-            self.critic_observations = None
+            self.obs_historys = None
+            self.privileged_observations = None
             self.actions = None
             self.rewards = None
             self.dones = None
@@ -50,7 +51,7 @@ class RolloutStorage:
         def clear(self):
             self.__init__()
 
-    def __init__(self, num_envs, num_transitions_per_env, obs_shape, privileged_obs_shape, actions_shape, device='cpu'):
+    def __init__(self, num_envs, num_transitions_per_env, obs_shape, privileged_obs_shape,obs_history_shape, actions_shape, device='cpu'):
 
         self.device = device
 
@@ -64,6 +65,7 @@ class RolloutStorage:
             self.privileged_observations = torch.zeros(num_transitions_per_env, num_envs, *privileged_obs_shape, device=self.device)
         else:
             self.privileged_observations = None
+        self.observation_histories = torch.zeros(num_transitions_per_env, num_envs, *obs_history_shape, device=self.device)
         self.rewards = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
         self.actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
         self.dones = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device).byte()
@@ -89,7 +91,8 @@ class RolloutStorage:
         if self.step >= self.num_transitions_per_env:
             raise AssertionError("Rollout buffer overflow")
         self.observations[self.step].copy_(transition.observations)
-        if self.privileged_observations is not None: self.privileged_observations[self.step].copy_(transition.critic_observations)
+        if self.privileged_observations is not None: self.privileged_observations[self.step].copy_(transition.privileged_observations)
+        self.observation_histories[self.step].copy_(transition.obs_historys)
         self.actions[self.step].copy_(transition.actions)
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
@@ -150,6 +153,7 @@ class RolloutStorage:
         indices = torch.randperm(num_mini_batches*mini_batch_size, requires_grad=False, device=self.device)
 
         observations = self.observations.flatten(0, 1)
+        obs_history = self.observation_histories.flatten(0, 1)
         if self.privileged_observations is not None:
             critic_observations = self.privileged_observations.flatten(0, 1)
         else:
@@ -171,6 +175,7 @@ class RolloutStorage:
                 batch_idx = indices[start:end]
 
                 obs_batch = observations[batch_idx]
+                obs_history_batch = obs_history[batch_idx]
                 critic_observations_batch = critic_observations[batch_idx]
                 actions_batch = actions[batch_idx]
                 target_values_batch = values[batch_idx]
@@ -179,7 +184,7 @@ class RolloutStorage:
                 advantages_batch = advantages[batch_idx]
                 old_mu_batch = old_mu[batch_idx]
                 old_sigma_batch = old_sigma[batch_idx]
-                yield obs_batch, critic_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, \
+                yield obs_batch, critic_observations_batch,obs_history_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, \
                        old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None
 
     # for RNNs only

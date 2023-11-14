@@ -34,6 +34,7 @@ import torch.optim as optim
 
 from rsl_rl.modules import ActorCritic
 from rsl_rl.storage import RolloutStorage
+import torch.nn.functional as F
 
 class PPO:
     actor_critic: ActorCritic
@@ -47,11 +48,13 @@ class PPO:
                  value_loss_coef=1.0,
                  entropy_coef=0.0,
                  learning_rate=1e-3,
+                 adaptation_module_learning_rate = 1.e-3,
                  max_grad_norm=1.0,
                  use_clipped_value_loss=True,
                  schedule="fixed",
                  desired_kl=0.01,
                  device='cpu',
+                 num_adaptation_module_substeps = 1
                  ):
 
         self.device = device
@@ -59,12 +62,14 @@ class PPO:
         self.desired_kl = desired_kl
         self.schedule = schedule
         self.learning_rate = learning_rate
-
+        self.adaptation_module_learning_rate = adaptation_module_learning_rate 
+        self.num_adaptation_module_substeps = num_adaptation_module_substeps
         # PPO components
         self.actor_critic = actor_critic
         self.actor_critic.to(self.device)
         self.storage = None # initialized later
         self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=learning_rate)
+        self.adaptation_optimizer = optim.Adam(self.actor_critic.adaptation_module.parameters(), lr=self.adaptation_module_learning_rate)
         self.transition = RolloutStorage.Transition()
 
         # PPO parameters
@@ -78,27 +83,26 @@ class PPO:
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
 
-    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
-        self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, self.device)
+    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, obs_history_shape, action_shape):
+        self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, obs_history_shape, action_shape, self.device)
 
     def test_mode(self):
-        self.actor_critic.test()
+        self.actor_critic.eval()
     
     def train_mode(self):
         self.actor_critic.train()
 
-    def act(self, obs, critic_obs):
-        if self.actor_critic.is_recurrent:
-            self.transition.hidden_states = self.actor_critic.get_hidden_states()
+    def act(self,  obs, privileged_obs, obs_history,):
         # Compute the actions and values
-        self.transition.actions = self.actor_critic.act(obs).detach()
-        self.transition.values = self.actor_critic.evaluate(critic_obs).detach()
+        self.transition.actions = self.actor_critic.act_student(obs,privileged_obs,obs_history).detach()
+        self.transition.values = self.actor_critic.evaluate(obs,privileged_obs).detach()
         self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.actor_critic.action_mean.detach()
         self.transition.action_sigma = self.actor_critic.action_std.detach()
         # need to record obs and critic_obs before env.step()
         self.transition.observations = obs
-        self.transition.critic_observations = critic_obs
+        self.transition.privileged_observations = privileged_obs
+        self.transition.obs_historys = obs_history
         return self.transition.actions
     
     def process_env_step(self, rewards, dones, infos):
@@ -113,24 +117,22 @@ class PPO:
         self.transition.clear()
         self.actor_critic.reset(dones)
     
-    def compute_returns(self, last_critic_obs):
-        last_values= self.actor_critic.evaluate(last_critic_obs).detach()
+    def compute_returns(self, last_critic_obs,privileged_obs):
+        last_values= self.actor_critic.evaluate(last_critic_obs,privileged_obs).detach()
         self.storage.compute_returns(last_values, self.gamma, self.lam)
 
     def update(self):
         mean_value_loss = 0
         mean_surrogate_loss = 0
-        if self.actor_critic.is_recurrent:
-            generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
-        else:
-            generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
-        for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
+        mean_adaptation_module_loss = 0 
+        generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+        for obs_batch, pri_obs_batch, obs_history_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
             old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch in generator:
 
 
-                self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0])
+                self.actor_critic.act_teacher(obs_batch,privileged_obs=pri_obs_batch,obs_history=obs_history_batch)
                 actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
-                value_batch = self.actor_critic.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
+                value_batch = self.actor_critic.evaluate(obs_batch, pri_obs_batch)
                 mu_batch = self.actor_critic.action_mean
                 sigma_batch = self.actor_critic.action_std
                 entropy_batch = self.actor_critic.entropy
@@ -149,7 +151,6 @@ class PPO:
                         
                         for param_group in self.optimizer.param_groups:
                             param_group['lr'] = self.learning_rate
-
 
                 # Surrogate loss
                 ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
@@ -179,9 +180,23 @@ class PPO:
                 mean_value_loss += value_loss.item()
                 mean_surrogate_loss += surrogate_loss.item()
 
+                # Adaptation loss
+                for epoch in range(self.num_adaptation_module_substeps):
+                    adaptation_pred = self.actor_critic.get_student_latent(obs_history_batch)
+                    with torch.no_grad():
+                        adaptation_target = self.actor_critic.get_teacher_latent(obs_batch, pri_obs_batch)
+
+                    adaptation_loss = F.mse_loss(adaptation_pred, adaptation_target)
+                    self.adaptation_optimizer.zero_grad()
+                    adaptation_loss.backward()
+                    self.adaptation_optimizer.step()
+
+                    mean_adaptation_module_loss += adaptation_loss.item()
+
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
         mean_surrogate_loss /= num_updates
+        mean_adaptation_module_loss /= (num_updates * self.num_adaptation_module_substeps)
         self.storage.clear()
 
-        return mean_value_loss, mean_surrogate_loss
+        return mean_value_loss, mean_surrogate_loss,mean_adaptation_module_loss

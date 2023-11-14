@@ -198,7 +198,7 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         actor_f_hid_nonlinear = 'lrelu'
         actor_f_out_nonlinear = 'identity'
         # actor-k 函数设计
-        k_lips = True
+        k_lips = False
         actor_global_lips = False
         actor_multi_k = True 
         actor_k_init = 10
@@ -221,10 +221,10 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         num_learning_epochs = 5
         num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
         # 调整学习率
-        DAgger_coef = 1.0
+        DAgger_coef = 0.8
         learning_rate_actor_f = 1.e-5
         learning_rate_actor_k = 1.e-5
-        lips_loss_coef = 1e-5 #1e-5 好像不能太大
+        lips_loss_coef = 1e-1 #1e-5 好像不能太大
         jac_norm_loss_coef = 0.0 # 想要限制唯一解 
 
         learning_rate_student = 1.e-5
@@ -250,8 +250,8 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
 
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
-        experiment_name = 'Multi_K_Lips' # name of the experiment
-        run_name = ''
+        experiment_name = 'LipsNet' # name of the experiment
+        run_name = '1e-1_L2'
         
         # load and resume
         resume = False
