@@ -49,6 +49,7 @@ class OnPolicyRunner:
                  log_dir=None,
                  device='cpu'):
         self.train_cfg = train_cfg
+        # print("Test: ",self.train_cfg.keys())
         self.cfg=train_cfg["runner"]
         self.alg_cfg = train_cfg["algorithm"]
         self.policy_cfg = train_cfg["policy"]

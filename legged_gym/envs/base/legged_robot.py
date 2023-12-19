@@ -49,6 +49,13 @@ from legged_gym.utils.helpers import class_to_dict
 from .legged_robot_config import LeggedRobotCfg
 from legged_gym.envs.go1.go1_config_prilipsnet import Go1RoughCfgPriLipsNet
 
+def rand_like(buf):
+    return 2 * torch.rand_like(buf) - 1
+
+def randn_like(buf):
+    # truncate to [-3 sigma, 3 sigma]
+    return torch.randn_like(buf).clamp(-3, 3)
+
 class LeggedRobot(BaseTask):
     def __init__(self, cfg: Go1RoughCfgPriLipsNet, sim_params, physics_engine, sim_device, headless):
         """ Parses the provided config file,
@@ -77,6 +84,7 @@ class LeggedRobot(BaseTask):
         self._prepare_reward_function()  # 获取配置文件中要求用的reward函数，以及各reward func的权重
         self.init_done = True
         self.eval = False
+        self.sample_noise_like = rand_like
 
     def step(self, actions):
         """ Apply actions, simulate, call self.post_physics_step()
@@ -270,7 +278,9 @@ class LeggedRobot(BaseTask):
         # add noise if needed
         if self.add_noise:
             # print("Noise Vec: ",(2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec[0:48]  )
-            self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec[0:48] 
+            # self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec[0:48] 
+            # self.obs_buf += (2 * self.sample_noise_like(self.obs_buf) - 1) * self.noise_scale_vec[0:48]
+            self.obs_buf += self.sample_noise_like(self.obs_buf) * self.noise_scale_vec[0:48]
 
     def create_sim(self):
         """ Creates simulation, terrain and evironments
@@ -546,6 +556,7 @@ class LeggedRobot(BaseTask):
         Returns:
             [torch.Tensor]: Vector of scales used to multiply a uniform distribution in [-1, 1]
         """
+        self.sample_noise_like = rand_like
         noise_vec = torch.zeros_like(self.obs_buf[0])
         self.add_noise = self.cfg.noise.add_noise
         noise_scales = self.cfg.noise.noise_scales
@@ -1026,10 +1037,10 @@ class LeggedRobot(BaseTask):
             commands = commands.reshape(1,3).repeat(self.num_envs, 1)
         self.commands[:,0:3] = commands[:,0:3].clone()
     
-    def set_eval(self, eval:True):
+    def set_eval(self, eval=True):
         self.eval = eval
     
-    def set_noise_scale(self, level = 1.0 ): 
+    def set_noise_scale(self, level = 1.0, noise_type = "gaussian" ): 
         noise_vec = torch.zeros_like(self.obs_buf[0])
         self.add_noise = True 
         noise_scales = self.cfg.noise.noise_scales
@@ -1042,6 +1053,12 @@ class LeggedRobot(BaseTask):
         noise_vec[24:36] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
         noise_vec[36:48] = 0. # previous actions
         self.noise_scale_vec[0:48] = noise_vec[0:48]
+        if noise_type == "gaussian":
+            self.sample_noise_like = randn_like
+        elif noise_type == "uniform":
+            self.sample_noise_like = rand_like
+        else:
+            raise NotImplementedError
 
     # def push_robots(self, max_vel ):
     #     if max_vel is None:
@@ -1084,7 +1101,7 @@ class LeggedRobot(BaseTask):
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques))
             #! Add Force 
             forces = torch.zeros((self.num_envs, self.num_bodies, 3), device=self.device, dtype=torch.float)
-            force_norm = 100 + 200 * push_level
+            force_norm = 100 * push_level
             theta = torch.rand((self.num_envs, 1), device=self.device) * 2 * np.pi
             forces[:, push_index, 0] = force_norm * torch.cos(theta).squeeze(1)
             forces[:, push_index, 1] = force_norm * torch.sin(theta).squeeze(1)
@@ -1131,3 +1148,22 @@ class LeggedRobot(BaseTask):
             'done':self.reset_buf.cpu().numpy(),
         }
         return result 
+
+    def get_noise_eval_result(self):
+
+        tracking_error = torch.norm(self.commands[:, :2] - self.base_lin_vel[:, :2], dim=-1,p=2).cpu().numpy()
+        action_fluctation = torch.norm(self.last_actions - self.llast_actions, dim=-1,p=2).cpu().numpy() #! 其实是 fluction,因为 last action 更新了
+        power = (self.torques * self.dof_vel).clamp(min=0.).sum(dim=-1).cpu().numpy()
+        cost_of_transport = power / (9.8 * 11 * torch.norm(self.base_lin_vel[:, :2], dim=-1,p=2)).cpu().numpy()
+        res = {
+            'done':self.reset_buf.cpu().numpy(),
+            'action_fluctation': action_fluctation,
+            'tracking_error': tracking_error,
+            'cost_of_transport': cost_of_transport,
+            'base_vel':self.base_lin_vel[:,0:3].cpu().numpy(),
+            "contact_force_z":  self.contact_forces[:, self.feet_indices, 2].cpu().numpy(),
+            "base_vel_roll": self.base_ang_vel[:,0].cpu().numpy(),
+            "base_vel_pitch": self.base_ang_vel[:,1].cpu().numpy(),
+            "base_vel_yaw": self.base_ang_vel[:,2].cpu().numpy(),
+        }
+        return res

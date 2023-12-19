@@ -57,40 +57,8 @@ class ActorCritic(nn.Module):
         self.num_obs_history = num_obs_history
         self.num_privileged_obs = num_privileged_obs
         activation = get_activation(activation)
-        # Teacher Policy
-        ## EnvEncoder
-        teacher_adaptation_input = self.num_privileged_obs + self.num_obs 
-        adaptation_module_layers = []
-        adaptation_module_layers.append(nn.Linear(teacher_adaptation_input, adaptation_module_branch_hidden_dims[0]))
-        adaptation_module_layers.append(activation)
-        for l in range(len(adaptation_module_branch_hidden_dims)):
-            if l == len(adaptation_module_branch_hidden_dims) - 1:
-                adaptation_module_layers.append(
-                    nn.Linear(adaptation_module_branch_hidden_dims[l],latent_dim)) #! latent_dim
-            else:
-                adaptation_module_layers.append(
-                    nn.Linear(adaptation_module_branch_hidden_dims[l],
-                              adaptation_module_branch_hidden_dims[l + 1]))
-                adaptation_module_layers.append(activation)
-        self.teacher_adaptation_module = nn.Sequential(*adaptation_module_layers)
-
-        # Adaptation Module 
-        adaptation_input_dim = num_obs_history
-        adaptation_module_layers = []
-        adaptation_module_layers.append(nn.Linear(adaptation_input_dim, adaptation_module_branch_hidden_dims[0]))
-        adaptation_module_layers.append(activation)
-        for l in range(len(adaptation_module_branch_hidden_dims)):
-            if l == len(adaptation_module_branch_hidden_dims) - 1:
-                adaptation_module_layers.append(
-                    nn.Linear(adaptation_module_branch_hidden_dims[l],latent_dim))
-            else:
-                adaptation_module_layers.append(
-                    nn.Linear(adaptation_module_branch_hidden_dims[l],
-                              adaptation_module_branch_hidden_dims[l + 1]))
-                adaptation_module_layers.append(activation)
-        self.adaptation_module = nn.Sequential(*adaptation_module_layers)
         # Student Policy
-        mlp_student_input_a = num_obs + latent_dim
+        mlp_student_input_a = num_obs_history 
         actor_layers = []
         actor_layers.append(nn.Linear(mlp_student_input_a, actor_hidden_dims[0]))
         actor_layers.append(activation)
@@ -103,7 +71,7 @@ class ActorCritic(nn.Module):
         self.actor = nn.Sequential(*actor_layers)
 
         # Value function
-        mlp_input_dim_c = num_obs + self.num_privileged_obs
+        mlp_input_dim_c = num_obs_history + self.num_privileged_obs
         critic_layers = []
         critic_layers.append(nn.Linear(mlp_input_dim_c, critic_hidden_dims[0]))
         critic_layers.append(activation)
@@ -155,47 +123,27 @@ class ActorCritic(nn.Module):
         mean = self.actor(observations)
         self.distribution = Normal(mean, mean*0. + self.std)
 
-    def act_student(self, obs, privileged_obs, obs_history):
+    def act(self, obs, privileged_obs, obs_history):
         obs_history = obs_history.reshape(-1, self.num_obs_history)
-        student_latent = self.adaptation_module(obs_history)
-        input = torch.cat((obs, student_latent), dim=-1)
-        action_mean = self.actor(input)
+        action_mean = self.actor(obs_history)
         self.distribution = Normal(action_mean, action_mean*0. + self.std)
         actions = self.distribution.sample()
         return actions 
     
-    def act_teacher(self,obs,privileged_obs, obs_history):
-        teacher_latent = self.teacher_adaptation_module(torch.cat((obs, privileged_obs), dim=-1))
-        input = torch.cat((obs, teacher_latent), dim=-1)
-        action_mean = self.actor(input)
-        self.distribution = Normal(action_mean, action_mean*0. + self.std)
-        actions = self.distribution.sample()
-        return actions
-    
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
-    def act_inference(self, obs_dict):
-        obs = obs_dict['obs']
+    def act_inference(self, obs_dict,**kwargs):
         obs_history = obs_dict['obs_history'].reshape(-1, self.num_obs_history)
-        student_latent = self.adaptation_module(obs_history)
-        input = torch.cat((obs, student_latent), dim=-1)
-        actions_mean = self.actor(input)
+        actions_mean = self.actor(obs_history)
         return actions_mean
 
-    def evaluate(self, obs,privileged_obs, **kwargs):
-        input = torch.cat((obs, privileged_obs), dim=-1)
+    def evaluate(self, obs,privileged_obs,obs_history, **kwargs):
+        obs_history = obs_history.reshape(-1, self.num_obs_history)
+        input = torch.cat((obs_history, privileged_obs), dim=-1)
         value = self.critic(input)
         return value
     
-    def get_teacher_latent(self,obs,privileged_obs):
-        input = torch.cat((obs, privileged_obs), dim=-1)
-        teacher_latent = self.teacher_adaptation_module(input)
-        return teacher_latent
-    def get_student_latent(self,obs_history):
-        obs_history = obs_history.reshape(-1, self.num_obs_history)
-        student_latent = self.adaptation_module(obs_history)
-        return student_latent
 
 def get_activation(act_name):
     if act_name == "elu":

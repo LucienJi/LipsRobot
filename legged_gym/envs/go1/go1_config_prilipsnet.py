@@ -161,9 +161,9 @@ class Go1RoughCfgPriLipsNet( LeggedRobotCfg ):
             
     class domain_rand:
         randomize_friction = True
-        friction_range = [0.5, 1.25]
+        friction_range = [0.3, 1.25]
         randomize_base_mass = True
-        added_mass_range = [-2., 2.]
+        added_mass_range = [-1., 1.]
         randomize_restitution = True
         restitution_range = [0.0, 0.4]
         randomize_com_displacement = False 
@@ -224,8 +224,10 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         DAgger_coef = 0.8
         learning_rate_actor_f = 1.e-5
         learning_rate_actor_k = 1.e-5
-        lips_loss_coef = 1e-1 #1e-5 好像不能太大
+        
         jac_norm_loss_coef = 0.0 # 想要限制唯一解 
+        lips_loss_coef = 1e-5 #1e-5 好像不能太大
+        learnable_lips_coef = True
 
         learning_rate_student = 1.e-5
         
@@ -246,12 +248,12 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         num_steps_per_env = 24 # per iteration
         max_iterations = 5000 # number of policy updates
         update_teacher = True
-        start_update_student = 2000
+        start_update_student = 1000
 
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
         experiment_name = 'LipsNet' # name of the experiment
-        run_name = '1e-1_L2'
+        run_name = 'Learnable'
         
         # load and resume
         resume = False

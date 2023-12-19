@@ -73,7 +73,7 @@ class Go1Eval( LeggedRobotCfg ):
         }
     
     class terrain:
-        mesh_type = 'trimesh' # "heightfield" # none, plane, heightfield or trimesh
+        mesh_type = 'plane' # "heightfield" # none, plane, heightfield or trimesh
         horizontal_scale = 0.1 # [m]
         vertical_scale = 0.005 # [m]
         border_size = 25 # [m]
@@ -233,14 +233,15 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         algorithm_class_name = 'PPOPriLipsNet'
         num_steps_per_env = 24 # per iteration
         max_iterations = 5000 # number of policy updates
-        update_teacher = True
+        update_teacher = False
         start_update_student = 2000
 
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
         # experiment_name = 'BC_MLP' # name of the experiment
-        experiment_name = 'LipsNet' # name of the experiment
-        run_name = '1e-3_L2'
+        # experiment_name = 'LipsNet' # name of the experiment
+        experiment_name = "LipsNet"
+        run_name = '1e-5'
         
         # load and resume
         resume = False

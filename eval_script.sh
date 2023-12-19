@@ -1,0 +1,2 @@
+nohup python eval_noise.py --headless --rl_device cuda:1 --sim_device cuda:1 --model_type Expert --model_path logs/Expert/Dec17_16-24-02_MLP/model_10000.pt \
+--cmd_vel 0.5 --eval_path  logs/Eval2 --eval_name debug

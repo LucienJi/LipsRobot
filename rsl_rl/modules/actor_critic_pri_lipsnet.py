@@ -71,6 +71,7 @@ class ActorCriticPriLipsNet(nn.Module):
         self.num_obs = num_obs
         self.num_obs_history = num_obs_history
         self.num_privileged_obs = num_privileged_obs
+        self.num_actions = num_actions 
         self.use_lips = use_lips
         activation = get_activation(activation)
         # Teacher Policy
@@ -205,7 +206,7 @@ class ActorCriticPriLipsNet(nn.Module):
             self.distribution = Normal(action_mean, action_mean*0. + self.student_std)
             return self.distribution.sample()
 
-    def act_teacher(self, obs, privileged_obs , obs_history, use_privileged_obs = True):
+    def act_teacher(self, obs, privileged_obs , obs_history):
         # obs_dict: obs, obs_history, privileged_obs
         latent = self.get_teacher_latent(obs,privileged_obs)
         teacher_input = torch.cat((obs, latent), dim=-1)
@@ -216,19 +217,18 @@ class ActorCriticPriLipsNet(nn.Module):
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
-    def act_inference(self, obs_dict:dict, use_student=True):
+    def act_inference(self, obs_dict:dict, **kwargs):
         obs,pri_obs = obs_dict['obs'], obs_dict['privileged_obs']
         obs_history = obs_dict['obs_history'].reshape(-1, self.num_obs_history)
-        
-        if use_student:
-            student_input = torch.cat((obs, obs_history), dim=-1)
-            actions_mean = self.actor_student.forward(student_input)
-            return actions_mean
-        else:
+
+        if kwargs.get('use_teacher',False):
             latent = self.get_teacher_latent(obs,pri_obs)
             teacher_input = torch.cat((obs, latent), dim=-1)
             actions_mean = self.actor_teacher.forward(teacher_input)
-            return actions_mean
+        else:
+            student_input = torch.cat((obs, obs_history), dim=-1)
+            actions_mean = self.actor_student.forward(student_input)
+        return actions_mean
     
     def get_lips_info(self,obs_dict:dict):
         obs,pri_obs = obs_dict['obs'], obs_dict['privileged_obs']
@@ -238,7 +238,7 @@ class ActorCriticPriLipsNet(nn.Module):
         return k_out, jac_norm, f_out
         
 
-    def evaluate(self, critic_observations,privileged_obs):
+    def evaluate(self, critic_observations,privileged_obs,obs_history):
         input = torch.cat((critic_observations, privileged_obs), dim=-1)
         value = self.critic(input)
         return value

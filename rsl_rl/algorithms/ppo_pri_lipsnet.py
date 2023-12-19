@@ -34,6 +34,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from rsl_rl.modules import ActorCriticPriLipsNet
 from rsl_rl.storage import RolloutPriStorage
+from .lag import Lagrange
 
 class PPOPriLipsNet:
     actor_critic: ActorCriticPriLipsNet
@@ -190,6 +191,7 @@ class PPOPriLipsNet:
         max_k_out, max_jac_norm , max_f_out = 0, 0, 0
         min_k_out, min_jac_norm, min_f_out = 0, 0, 0
         mean_k_l2 = 0.0
+        mean_l2_coef = 0.0
 
         generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         for obs_batch, pri_obs_batch, obs_history_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
@@ -252,12 +254,17 @@ class PPOPriLipsNet:
                     with torch.no_grad():
                         self.actor_critic.act_teacher(obs_batch,pri_obs_batch,obs_history_batch,use_privileged_obs=True)
                         target_action = self.actor_critic.action_mean.detach() 
+
                     if self.use_lips:
                         
                         _, k_out, jac_norm, f_out = self.actor_critic.act_student(obs_batch,pri_obs_batch,obs_history_batch, get_info=True)
+                        # jac_norm_loss = self.jac_norm_loss_coef * torch.mean(jac_norm)
+
                         k_l2 = self.lips_loss_coef * torch.mean(k_out**2)
-                        jac_norm_loss = self.jac_norm_loss_coef * torch.mean(jac_norm)
-                        loss += k_l2   
+                        loss += k_l2
+                        mean_l2_coef += self.lips_loss_coef 
+                        
+
                         mean_k_out += torch.mean(k_out).item()
                         max_k_out += torch.max(k_out).item()
                         min_k_out += torch.min(k_out).item()
@@ -280,10 +287,6 @@ class PPOPriLipsNet:
                     self.student_optimizer.step()
                     mean_student_neglogp += neglogp.item()
 
-                     
-
-                    
-
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
@@ -300,7 +303,8 @@ class PPOPriLipsNet:
         min_k_out /= num_updates
         min_jac_norm /= num_updates
         mean_k_l2 /= num_updates
+        mean_l2_coef /= num_updates
         self.storage.clear()
 
         return mean_value_loss, mean_surrogate_loss, mean_student_neglogp,mean_adaptation_loss,\
-            mean_k_out, mean_jac_norm, mean_f_out, max_k_out, max_jac_norm, max_f_out, min_k_out, min_jac_norm ,min_f_out,mean_k_l2
+            mean_k_out, mean_jac_norm, mean_f_out, max_k_out, max_jac_norm, max_f_out, min_k_out, min_jac_norm ,min_f_out,mean_k_l2,mean_l2_coef

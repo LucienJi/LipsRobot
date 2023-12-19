@@ -133,7 +133,7 @@ class OnPolicyRunner:
                 self.alg.compute_returns(obs_dict['obs'], obs_dict['privileged_obs'])
             
             mean_value_loss, mean_surrogate_loss, mean_student_neglogp,mean_adaptation_loss,\
-            mean_k_out, mean_jac_norm, mean_f_out, max_k_out, max_jac_norm, max_f_out, min_k_out, min_jac_norm ,min_f_out,mean_k_l2= self.alg.update(
+            mean_k_out, mean_jac_norm, mean_f_out, max_k_out, max_jac_norm, max_f_out, min_k_out, min_jac_norm ,min_f_out,mean_k_l2,mean_l2_coef= self.alg.update(
                                                                                         update_teacher=self.cfg['update_teacher'], 
                                                                                         update_student=it > self.cfg['start_update_student'])
             stop = time.time()
@@ -185,6 +185,8 @@ class OnPolicyRunner:
         self.writer.add_scalar('Loss/mean_jac_norm', locs['mean_jac_norm'], locs['it'])
         self.writer.add_scalar('Loss/max_jac_norm', locs['max_jac_norm'], locs['it'])
         self.writer.add_scalar('Loss/min_jac_norm', locs['min_jac_norm'], locs['it'])
+
+        self.writer.add_scalar('Loss/L2_coef', locs['mean_l2_coef'], locs['it'])
         
         # self.writer.add_scalar('Loss/learning_rate', self.alg.learning_rate, locs['it'])
         # self.writer.add_scalar('Loss/learning_rate_actor_f', self.alg.learning_rate_actor_f, locs['it'])
@@ -222,6 +224,7 @@ class OnPolicyRunner:
                           f"""{'mean_f_out:':>{pad}} {locs['mean_f_out']:.4f}\n"""
                           f"""{'max_f_out:':>{pad}} {locs['max_f_out']:.4f}\n"""
                           f"""{'min_f_out:':>{pad}} {locs['min_f_out']:.4f}\n"""
+                          f"""{'L2 Coef:':>{pad}} {locs['mean_l2_coef']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
                           f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
                           f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n""")
@@ -246,6 +249,7 @@ class OnPolicyRunner:
                           f"""{'mean_f_out:':>{pad}} {locs['mean_f_out']:.4f}\n"""
                           f"""{'max_f_out:':>{pad}} {locs['max_f_out']:.4f}\n"""
                           f"""{'min_f_out:':>{pad}} {locs['min_f_out']:.4f}\n"""
+                          f"""{'L2 Coef:':>{pad}} {locs['mean_l2_coef']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
                         #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
                         #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")

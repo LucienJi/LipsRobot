@@ -175,7 +175,7 @@ class Go1RoughCfgPPOLipsNet(BaseConfig): # 不继承之前的训练配置，防�
         actor_squash_action = False
         ## critic 函数设计
         critic_hidden_dims = [512, 256, 128]
-        critic_activation = 'elu'
+        critic_activation = 'lrelu'
         
         
     class algorithm: #( LeggedRobotCfgPPO.algorithm ):

@@ -26,16 +26,6 @@ class HistoryWrapper(gym.Wrapper):
                 'obs_history': self.obs_history,
                 }, rew, done, info
 
-    def step_push(self, action,push_level,push_index):
-        # privileged information and observation history are stored in info
-        obs,privileged_obs, rew, done, info = self.env.step_push(action,push_level,push_index)
-        new_ids = (done > 0).nonzero(as_tuple=False)
-        self.obs_history[new_ids, :] = 0
-        self.obs_history = torch.cat((self.obs_history[:, 1:], obs.unsqueeze(1)), dim=1)
-        return {'obs': obs, 'privileged_obs': privileged_obs, 
-                'obs_history': self.obs_history,
-                }, rew, done, info
-
     def get_observations(self):
         obs = self.env.get_observations()
         privileged_obs = self.env.get_privileged_observations()
@@ -50,7 +40,8 @@ class HistoryWrapper(gym.Wrapper):
         self.obs_history[env_ids, :] = 0
 
     def reset(self):
-        obs, privileged_obs = self.env.reset()
+        with torch.inference_mode():
+            obs, privileged_obs = self.env.reset()
         privileged_obs = self.env.get_privileged_observations()
         self.obs_history[:, :] = 0
         self.obs_history = torch.cat((self.obs_history[:, 1:], obs.unsqueeze(1)), dim=1)
