@@ -186,7 +186,7 @@ class Go1RoughCfgPPO( LeggedRobotCfgPPO ):
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
         
-        run_name = 'MLP'
+        run_name = 'wReward'
         experiment_name = 'RMA'
 
   

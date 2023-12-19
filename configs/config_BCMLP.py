@@ -241,13 +241,13 @@ class Go1RoughCfgPPOMLPBC(BaseConfig): # 不继承之前的训练配置，防止
         max_iterations = 5000 # number of policy updates
 
         #! Important
-        start_update_student = 2000
         update_teacher = True
+        start_update_student = 2000
 
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
         experiment_name = 'BCMLP' # name of the experiment
-        run_name = 'withStudent' # name of the run
+        run_name = 'wReward' # name of the run
         
         # load and resume
         resume = False

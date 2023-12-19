@@ -253,7 +253,7 @@ class Go1RoughCfgPPOPriLipsNet(BaseConfig): # 不继承之前的训练配置，�
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
         experiment_name = 'LipsNet' # name of the experiment
-        run_name = 'withStudent'
+        run_name = 'wReward'
         
         # load and resume
         resume = False
