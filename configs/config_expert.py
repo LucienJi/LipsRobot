@@ -132,13 +132,14 @@ class Go1RoughCfg( LeggedRobotCfg ):
             lin_vel_z = -2.0 # -2.0
             ang_vel_xy = -0.05 # -0.05
             orientation = -0.
-            dof_vel = -0.
-            dof_acc = -5e-7 # -2.5e-7
             base_height = -0. 
             feet_air_time = 0.0 # 1.0
             collision = -1. # -1.0
             feet_stumble = -0.0 
-            action_rate = -0.01# -0.01 # -0.01 #TODO: 暂时删除action震荡的penalty
+            action_rate = -0.01# -0.01 #TODO: 暂时删除action震荡的penalty
+            dof_vel = -0.
+            dof_acc = -5e-7 # -2.5e-7
+
             stand_still = -0.
     
     class commands:
@@ -186,7 +187,7 @@ class Go1RoughCfgPPO( LeggedRobotCfgPPO ):
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
         
-        run_name = 'MLP'
+        run_name = 'wReward'
         experiment_name = 'Expert'
 
   
