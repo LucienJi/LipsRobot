@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from legged_gym.envs import LeggedRobot
+from legged_gym.envs.base.legged_robot import LeggedRobot
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
 from legged_gym.utils.helpers import class_to_dict,update_class_from_dict,parse_sim_params,get_load_path,update_cfg_from_args,get_args
 from legged_gym.envs.base.history_wrapper import HistoryWrapper

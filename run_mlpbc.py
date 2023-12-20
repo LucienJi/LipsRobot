@@ -33,7 +33,10 @@ def launch(args):
 
 if __name__ == '__main__':
     args = get_args()
+    teacher_path = "model_archive/Teacher_woReward.pt"
     env, runner , env_cfg ,train_cfg = launch(args)
+    if teacher_path is not None:
+        runner.load_expert(teacher_path)
     runner.learn(num_learning_iterations=10000)
     exit()
 

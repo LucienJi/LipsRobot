@@ -170,8 +170,8 @@ data/
 *.txt
 log_files/
 
-model_archive/*
-model_archive/go1_v2/
-model_archive/meta_terrain/
-model_archive/MORL/
+# model_archive/*
+# model_archive/go1_v2/
+# model_archive/meta_terrain/
+# model_archive/MORL/
 

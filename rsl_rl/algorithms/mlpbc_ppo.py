@@ -220,9 +220,9 @@ class PPO:
                 if update_student:
                     #! behavior cloning
                     with torch.no_grad():
-                        self.actor_critic.act_teacher(obs_batch,pri_obs_batch,obs_history_batch,use_privileged_obs=True)
+                        self.actor_critic.act_teacher(obs_batch,pri_obs_batch,obs_history_batch)
                         target_action = self.actor_critic.action_mean.detach() 
-                        self.actor_critic.act_student(obs_batch,pri_obs_batch,obs_history_batch )
+                    self.actor_critic.act_student(obs_batch,pri_obs_batch,obs_history_batch )
                     student_actions_log_prob_batch = self.actor_critic.get_actions_log_prob(target_action)
                     log_prob = student_actions_log_prob_batch.mean()
                     loss = -log_prob

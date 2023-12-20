@@ -252,7 +252,7 @@ class PPOPriLipsNet:
                     #! behavior cloning
                     loss = 0.0
                     with torch.no_grad():
-                        self.actor_critic.act_teacher(obs_batch,pri_obs_batch,obs_history_batch,use_privileged_obs=True)
+                        self.actor_critic.act_teacher(obs_batch,pri_obs_batch,obs_history_batch)
                         target_action = self.actor_critic.action_mean.detach() 
 
                     if self.use_lips:

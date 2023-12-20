@@ -247,8 +247,12 @@ class OnPolicyRunner:
 
     def load_expert(self,path):
         loaded_dict = torch.load(path)
+        for k,v in loaded_dict['model_state_dict'].items():
+            loaded_dict['model_state_dict'][k] = v.to(self.device)
         self.alg.actor_critic.teacher_adaptation_module.load_state_dict(loaded_dict['model_state_dict'],strict=False)
         self.alg.actor_critic.actor_teacher.load_state_dict(loaded_dict['model_state_dict'],strict=False)
+        self.alg.actor_critic.critic.load_state_dict(loaded_dict['model_state_dict'],strict=False)
+        self.alg.actor_critic.std.data = loaded_dict['model_state_dict']['std']
         print("###### Teacher loaded ######")
         return loaded_dict['infos']
     
