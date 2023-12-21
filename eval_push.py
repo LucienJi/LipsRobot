@@ -31,12 +31,15 @@
 from legged_gym import LEGGED_GYM_ROOT_DIR
 import os
 
+import isaacgym
+
 from legged_gym.envs import *
 from legged_gym.utils import  export_policy_as_jit, task_registry, Logger, class_to_dict
 from legged_gym.utils.helpers import parse_sim_params
 from isaacgym import gymutil
 from legged_gym.envs.base.history_wrapper import HistoryWrapper
-from legged_gym.envs.base.noise_wrapper import NoisyWrapper 
+# from legged_gym.envs.base.noise_wrapper import NoisyWrapper 
+from legged_gym.envs.base.push_wrapper import PushConfig, EvalWrapper
 from legged_gym.envs.go1.go1_eval_config import Go1Eval
 import numpy as np
 from legged_gym.utils.helpers import update_cfg_from_args
@@ -67,11 +70,13 @@ def get_eval_args():
         {"name": "--cmd_vel",'type':float, "default": 0.5},
         {"name": "--use_teacher",'type':bool, "default": False},
         {"name": "--eval_path", 'type':str, "default": "logs/Eval/ood/3body/v10"},
+        {"name": "--push_force", 'type':float, "default": 20},
+        {"name": "--random_push", 'type':bool, "default": 'True'},
+        {"name": "--push_interval", 'type':int, "default": 50},
+
     ]
     # parse arguments
     parser = argparse.ArgumentParser(description="Evaluation")
-    parser.add_argument('--noise_level', nargs='+', type=int, default=[1,2,3])
-    parser.add_argument('--noise_type', nargs='+', type=str, default=['uniform','gaussian'])
     # args = gymutil.parse_arguments(
     #     description="RL Policy",
     #     custom_parameters=custom_parameters)
@@ -89,11 +94,12 @@ def get_eval_args():
     return args
 
 
-def eval_all_noise(args,
+def eval_push(args,
                      model_type,
                      model_path,
-                    noise_level_list = [1,2,3,4,5], 
-                    noise_type_list = ['uniform','gaussian'],
+                    push_force = 20, 
+                    random_push = True,
+                    push_interval = 20,
                     target_vel = [0.5,0.0,0.0],
                     use_teacher = False,
                     eval_path = "logs/Eval",
@@ -117,6 +123,8 @@ def eval_all_noise(args,
         from rsl_rl.runners.rma_runner import OnPolicyRunner as Runner
         train_cfg = Go1RoughCfgPPO()
     
+    else:
+        raise NotImplementedError
     
     # env_cfg.env.num_envs = 100
     # env_cfg.terrain.num_rows = 5
@@ -124,7 +132,7 @@ def eval_all_noise(args,
     env_cfg.terrain.curriculum = False
     env_cfg.domain_rand.randomize_friction = False
     env_cfg.domain_rand.push_robots = False
-    env_cfg.noise.add_noise = True
+    env_cfg.noise.add_noise = False
 
     # prepare environment
     env_cfg.env.num_envs = min(env_cfg.env.num_envs, 100)
@@ -137,11 +145,19 @@ def eval_all_noise(args,
                                     sim_device=args.sim_device,
                                     headless=args.headless, 
                                     cfg = env_cfg)
-    env = HistoryWrapper(env)
     env.set_eval(True)
     env.set_commands(target_vel)
-    noisy_env = NoisyWrapper(env,env_cfg,cmd_vel=target_vel,
+    env = HistoryWrapper(env)
+    push_env = EvalWrapper(env,env_cfg,cmd_vel=target_vel,async_mode=True,
                              record = False,move_camera=False,experiment_name="eval")
+    
+    push_config = PushConfig(
+        id = 0,
+        body_index_list=[0],
+        push_interval=push_interval,
+        force_list=[push_force],
+    )
+    push_env.set_eval_config([push_config])
     # load policy
     train_cfg.runner.resume = False
     _,train_cfg = update_cfg_from_args(None, train_cfg, args)
@@ -152,27 +168,19 @@ def eval_all_noise(args,
     ppo_runner.load(model_path)
     policy = ppo_runner.get_inference_policy(device=env.device)
 
-    
-    for noise_type in noise_type_list:
-        for noise_level in noise_level_list:
-            with torch.no_grad():
-                noisy_env.reset()
-            noisy_env.set_noise_scale(noise_level,noise_type)
-            # tmp_eval_name = train_cfg.runner.experiment_name + "-" + train_cfg.runner.run_name + "-noise_type-"+ noise_type + "-noise_level-" + str(noise_level)  + "-" + eval_name
-            tmp_eval_name = train_cfg.runner.experiment_name + "-noise_type-"+ noise_type + "-noise_level-" + str(noise_level)  + "-" + eval_name
+    tmp_eval_name = train_cfg.runner.experiment_name + "-push_force-"+ str(push_force) + "-push_interval-" + str(push_interval) + "-random_push-"+str(random_push) + "-" + eval_name
             
-            # with torch.inference_mode():
-            with torch.no_grad():
-                for i in range(int(env.max_episode_length) + 10):
-                    actions = policy(noisy_env.obs_dict,use_teacher=use_teacher)
-                    noisy_env.step(actions.detach())
-            eval_res = noisy_env.get_result()
-            eval_res['name'] = eval_name
-            if os.path.exists(eval_path) == False:
-                os.makedirs(eval_path)
-            eval_file_name = os.path.join(eval_path,tmp_eval_name)
-            np.save(eval_file_name, eval_res)
-
+    # with torch.inference_mode():
+    with torch.no_grad():
+        for i in range(int(env.max_episode_length) + 10):
+            actions = policy(push_env.obs_dict,use_teacher=use_teacher)
+            push_env.step(actions.detach())
+    eval_res = push_env.get_result()
+    eval_res['name'] = eval_name
+    if os.path.exists(eval_path) == False:
+        os.makedirs(eval_path)
+    eval_file_name = os.path.join(eval_path,tmp_eval_name)
+    np.save(eval_file_name, eval_res)
     print("Eval Done")
 
 
@@ -182,12 +190,13 @@ if __name__ == '__main__':
     args = get_eval_args()
     #! Eval Expert
 
-    eval_all_noise(
+    eval_push(
         args,
         model_type=args.model_type,
         model_path=args.model_path,
-        noise_level_list=args.noise_level,
-        noise_type_list=args.noise_type,
+        push_force=args.push_force,
+        random_push=args.random_push,
+        push_interval=args.push_interval,
         target_vel=[args.cmd_vel,0.0,0.0],
         use_teacher=args.use_teacher,
         eval_path = args.eval_path,
