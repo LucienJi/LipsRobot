@@ -32,7 +32,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from rsl_rl.modules import ActorCriticPriLipsNet
+from rsl_rl.modules.actor_critic_pri_lipsnet_v2 import ActorCriticPriLipsNet
 from rsl_rl.storage import RolloutPriStorage
 from .lag import Lagrange
 
@@ -76,7 +76,7 @@ class PPO:
         # self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=learning_rate)
         # 设置特殊的optimizer
         self.teacher_optimizer = torch.optim.Adam([
-                {'params':self.actor_critic.teacher_adaptation_module.parameters(), 'lr':'inf', 'lr_name':'learning_rate_teacher',},
+                # {'params':self.actor_critic.teacher_adaptation_module.parameters(), 'lr':'inf', 'lr_name':'learning_rate_teacher',},
                 {'params':self.actor_critic.actor_teacher.parameters(), 'lr':'inf', 'lr_name':'learning_rate_teacher',},
                 {'params':self.actor_critic.critic.parameters(), 'lr':'inf', 'lr_name':'learning_rate_critic',},
                 {'params':self.actor_critic.std, 'lr':'inf', 'lr_name':"learning_rate_teacher",  },

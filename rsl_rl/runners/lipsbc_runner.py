@@ -37,7 +37,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torch
 
 from rsl_rl.algorithms.lipsbc_ppo import PPOPriLipsNet
-from rsl_rl.modules import ActorCriticPriLipsNet
+from rsl_rl.modules.actor_critic_pri_lipsnet_v2 import ActorCriticPriLipsNet
 from rsl_rl.env import VecEnv
 import json 
 

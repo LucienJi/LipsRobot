@@ -1064,6 +1064,37 @@ class LeggedRobot(BaseTask):
             self.sample_noise_like = rand_like
         else:
             raise NotImplementedError
+    
+    def set_noise_percent(self, percent = 0.1, noise_type = "gaussian"):
+        noise_vec = torch.zeros_like(self.obs_buf[0])
+        self.add_noise = True 
+        dof_range = (self.dof_pos_limits[:,1] - self.dof_pos_limits[:,0])/2.0
+        dof_vel_range = self.dof_vel_limits/2.0
+        base_x_vel_range =  (self.cfg.commands.ranges.lin_vel_x[1] - self.cfg.commands.ranges.lin_vel_x[0])/2.0
+        base_y_vel_range =  (self.cfg.commands.ranges.lin_vel_y[1] - self.cfg.commands.ranges.lin_vel_y[0])/2.0
+        #! 默认原先 noise scale = 10% scale 
+        base_z_vel_range =  1.0 
+        base_vel_range = torch.tensor([base_x_vel_range, base_y_vel_range, base_z_vel_range], device=self.device)
+        base_ang_vel_range =  torch.tensor([2,2,(self.cfg.commands.ranges.ang_vel_yaw[1] - self.cfg.commands.ranges.ang_vel_yaw[0])/2.0],device=self.device)
+        gravity_range = 0.5
+
+        #! set percentage 
+        noise_vec[:3] = base_vel_range * percent * self.obs_scales.lin_vel
+        noise_vec[3:6] = base_ang_vel_range * percent * self.obs_scales.ang_vel
+        noise_vec[6:9] = gravity_range * percent
+        noise_vec[9:12] = 0. #! 不是测量的
+        noise_vec[12:24] = dof_range * percent * self.obs_scales.dof_pos
+        noise_vec[24:36] = dof_vel_range * percent * self.obs_scales.dof_vel
+        noise_vec[36:48] = 0. #! 不是测量的
+        self.noise_scale_vec[0:48] = noise_vec[0:48]
+        if noise_type == "gaussian":
+            self.sample_noise_like = randn_like
+        elif noise_type == "uniform":
+            self.sample_noise_like = rand_like
+        else:
+            raise NotImplementedError
+
+
 
     #region 
     def set_push_eval(self):

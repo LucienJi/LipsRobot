@@ -142,9 +142,9 @@ class Go1RoughCfgMLPBC( LeggedRobotCfg ):
             feet_air_time = 0.0 # 1.0
             collision = -1. # -1.0
             feet_stumble = -0.0 
-            action_rate =  -0.0 # -0.01 #TODO: 暂时删除action震荡的penalty
+            action_rate =  -0.01 # -0.01 #TODO: 暂时删除action震荡的penalty
             dof_vel = -0.
-            dof_acc =  0.0 #-5e-7 # -5e-7
+            dof_acc =  -5e-7 # -5e-7
             stand_still = -0.
     
     class commands:
@@ -242,12 +242,12 @@ class Go1RoughCfgPPOMLPBC(BaseConfig): # 不继承之前的训练配置，防止
 
         #! Important
         update_teacher = True
-        start_update_student = 1000
+        start_update_student = 10000
 
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
-        experiment_name = 'BCMLP'    #'Teacher' # name of the experiment
-        run_name = 'woReward' # name of the run
+        experiment_name = 'BCMLP_v2'    #'Teacher' # name of the experiment
+        run_name = 'wReward' # name of the run
         
         # load and resume
         resume = False

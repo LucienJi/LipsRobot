@@ -72,7 +72,8 @@ def get_eval_args():
         {"name": "--eval_path", 'type':str, "default": "logs/Eval/ood/3body/v10"},
         {"name": "--push_force", 'type':float, "default": 20},
         {"name": "--random_push", 'type':bool, "default": 'True'},
-        {"name": "--push_interval", 'type':int, "default": 50},
+        {"name": "--push_interval", 'type':int, "default": 100},
+        {"name": "--push_duration", 'type':int, "default": 25},
 
     ]
     # parse arguments
@@ -99,7 +100,8 @@ def eval_push(args,
                      model_path,
                     push_force = 20, 
                     random_push = True,
-                    push_interval = 20,
+                    push_interval = 100,
+                    push_duration = 25,
                     target_vel = [0.5,0.0,0.0],
                     use_teacher = False,
                     eval_path = "logs/Eval",
@@ -155,6 +157,7 @@ def eval_push(args,
         id = 0,
         body_index_list=[0],
         push_interval=push_interval,
+        push_duration=push_duration,
         force_list=[push_force],
     )
     push_env.set_eval_config([push_config])
@@ -168,7 +171,7 @@ def eval_push(args,
     ppo_runner.load(model_path)
     policy = ppo_runner.get_inference_policy(device=env.device)
 
-    tmp_eval_name = train_cfg.runner.experiment_name + "-push_force-"+ str(push_force) + "-push_interval-" + str(push_interval) + "-random_push-"+str(random_push) + "-" + eval_name
+    tmp_eval_name = train_cfg.runner.experiment_name + "-push_force-"+ str(push_force) + "-push_interval-" + str(push_interval) + "-push_duration-"+str(push_duration) + "-" + eval_name
             
     # with torch.inference_mode():
     with torch.no_grad():
@@ -197,6 +200,7 @@ if __name__ == '__main__':
         push_force=args.push_force,
         random_push=args.random_push,
         push_interval=args.push_interval,
+        push_duration=args.push_duration,
         target_vel=[args.cmd_vel,0.0,0.0],
         use_teacher=args.use_teacher,
         eval_path = args.eval_path,

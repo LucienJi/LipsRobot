@@ -10,7 +10,7 @@ from collections import defaultdict
 class NoisyWrapper():
 
     def __init__(self, env:LeggedRobot, env_cfg, cmd_vel = [0.5, 0.0,0.0],
-                 record = False, move_camera = False,experiment_name = 'Eval'):
+                 record = False, move_camera = False,experiment_name = 'NoisePercent'):
         self.env = env
         self.env.set_eval()
         self.eval_config = None
@@ -45,6 +45,11 @@ class NoisyWrapper():
         self.noise_level = noise_level
         self.noise_type = noise_type
         self.env.set_noise_scale(noise_level,noise_type)
+    
+    def set_noise_percent(self,percent,noise_type):
+        self.noise_level = percent
+        self.noise_type = noise_type
+        self.env.set_noise_percent(percent,noise_type)
     
     
     def step(self, action):

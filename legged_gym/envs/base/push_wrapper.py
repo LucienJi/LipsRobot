@@ -12,11 +12,13 @@ class PushConfig:
                  id,
                  body_index_list:list,
                  push_interval:int,
+                 push_duration:int,
                  force_list:list, 
                  ) -> None:
         self.id = id 
         self.body_index_list =body_index_list
         self.push_interval = push_interval
+        self.push_duration = push_duration
         self.force_list = force_list 
         assert len(self.body_index_list) > 0 and  len(self.force_list) > 0
         self._force = self.force_list[0]
@@ -91,7 +93,7 @@ class EvalWrapper():
                 self.eval_res[f'body_index_{i}'].append(body_index)
             else:
                 body_index = config._body_index
-            if self.step_ct% config.push_interval == 0:
+            if self.step_ct% config.push_interval < config.push_duration:
                 self.env.set_force_apply(body_index, config._force,random_push )
                 
         self.obs_dict, rewards, dones, infos= self.env.step(action.detach())
